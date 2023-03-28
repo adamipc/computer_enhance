@@ -4,15 +4,15 @@ use std::io;
 use std::io::Read;
 
 const OPCODES: [(u8, (&str, usize)); 1] = [(0b10001000, ("mov", 1))];
-const REG_ENCODING: [(u8, (&str, &str)); 8] = [
-    (0x0, ("al", "ax")),
-    (0x1, ("cl", "cx")),
-    (0x2, ("dl", "dx")),
-    (0x3, ("bl", "bx")),
-    (0x4, ("ah", "sp")),
-    (0x5, ("ch", "bp")),
-    (0x6, ("dh", "si")),
-    (0x7, ("bh", "di")),
+const REGISTER_ENCODING: [(u8, (&str, &str)); 8] = [
+    (0b000, ("al", "ax")),
+    (0b001, ("cl", "cx")),
+    (0b010, ("dl", "dx")),
+    (0b011, ("bl", "bx")),
+    (0b100, ("ah", "sp")),
+    (0b101, ("ch", "bp")),
+    (0b110, ("dh", "si")),
+    (0b111, ("bh", "di")),
 ];
 
 fn main() -> io::Result<()> {
@@ -32,8 +32,8 @@ fn main() -> io::Result<()> {
 
     println!("\nbits 16\n");
     let mut e = buffer.iter().enumerate();
-    while let Some((i, byte)) = e.next() {
-        //println!("; {i}: {byte:#b}");
+    while let Some((_i, byte)) = e.next() {
+        //println!("; {_i}: {byte:#b}");
         let (instruction, datalen) = get_instruction(*byte).unwrap();
         //println!("; Got instruction: {instruction}. Need to read {datalen} bytes of data.");
         let reg_is_destination = byte & 0x2 == 0x2;
@@ -42,8 +42,8 @@ fn main() -> io::Result<()> {
         let mut data = Vec::new();
         for _ in [0..datalen] {
             match e.next() {
-                Some((i, byte)) => {
-                    //println!("; data {i}: {byte:#b}");
+                Some((_i, byte)) => {
+                    //println!("; data {_i}: {byte:#b}");
                     data.push(byte)
                 }
                 None => panic!("Couldn't read enough data."),
@@ -51,35 +51,29 @@ fn main() -> io::Result<()> {
         }
 
         match instruction {
-            "mov" => {
-                let reg = get_reg_encoding((*data[0] & 0b00111000) >> 3, operates_on_word).unwrap();
-                let rm = get_reg_encoding(*data[0] & 0b00000111, operates_on_word).unwrap();
-                //println!("; Got REG/RM registers: {reg}/{rm}");
-                if reg_is_destination {
-                    println!("mov {reg}, {rm}");
-                } else {
-                    println!("mov {rm}, {reg}");
+            "mov" => match (data[0] & 0b1100_0000).rotate_left(2) {
+                0b11 => {
+                    let reg = get_register_encoding(
+                        (*data[0] & 0b0011_1000).rotate_right(3),
+                        operates_on_word,
+                    )
+                    .unwrap();
+                    let rm =
+                        get_register_encoding(*data[0] & 0b0000_0111, operates_on_word).unwrap();
+                    println!("; reg: {reg}, rm: {rm}");
+                    if reg_is_destination {
+                        println!("mov {reg}, {rm}");
+                    } else {
+                        println!("mov {rm}, {reg}");
+                    }
                 }
-            }
+                n => panic!("Memory mode for MOV not implemented: {n:#b}"),
+            },
             &_ => todo!(),
         }
     }
 
     Ok(())
-}
-
-fn get_reg_encoding(byte: u8, operates_on_word: bool) -> Option<&'static str> {
-    for (reg_value, (reg_byte, reg_word)) in REG_ENCODING {
-        if byte == reg_value {
-            if operates_on_word {
-                return Some(reg_word);
-            } else {
-                return Some(reg_byte);
-            }
-        }
-    }
-
-    None
 }
 
 fn get_instruction(byte: u8) -> Option<(&'static str, usize)> {
@@ -90,4 +84,18 @@ fn get_instruction(byte: u8) -> Option<(&'static str, usize)> {
     }
 
     None
+}
+
+fn get_register_encoding(byte: u8, word: bool) -> Option<&'static str> {
+    REGISTER_ENCODING.iter().find_map(|(key, val)| {
+        if byte == *key {
+            if word {
+                Some(val.1)
+            } else {
+                Some(val.0)
+            }
+        } else {
+            None
+        }
+    })
 }
