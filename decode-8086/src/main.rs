@@ -3,12 +3,35 @@ use std::fs::File;
 use std::io;
 use std::io::Read;
 
-const OPCODES: [(u8, u8, &str); 5] = [
-    (0b100_01000, 0b1111_1100, "mov-reg_mem-to_from-reg"),
-    (0b101_10000, 0b1111_0000, "mov-immediate-to-reg"),
-    (0b110_00110, 0b1111_1110, "mov-immediate-to-reg_mem"),
-    (0b101_00000, 0b1111_1110, "mov-memory-to-accumulator"),
-    (0b101_00010, 0b1111_1110, "mov-accumulator-to-memory"),
+const OPCODES: [(u8, u8, &str); 12] = [
+    (0b1000_1000, 0b1111_1100, "mov-reg_mem-to_from-reg"),
+    (0b1011_0000, 0b1111_0000, "mov-immediate-to-reg"),
+    (0b1100_0110, 0b1111_1110, "mov-immediate-to-reg_mem"),
+    (0b1010_0000, 0b1111_1110, "mov-memory-to-accumulator"),
+    (0b1010_0010, 0b1111_1110, "mov-accumulator-to-memory"),
+    (
+        0b0000_0000,
+        0b1100_0100,
+        "arithmatic-reg_mem-and-reg-to-either",
+    ),
+    (0b1000_0000, 0b1111_1100, "arithmatic-immediate-to-reg_mem"),
+    (
+        0b0000_0100,
+        0b1100_0110,
+        "arithmatic-immediate-with-accumulator",
+    ),
+    (
+        0b0011_0100,
+        0b1111_1100,
+        "arithmatic-immediate-with reg_mem",
+    ), // xor
+    (
+        0b0011_0100,
+        0b1111_1110,
+        "arithmatic-immediate-with-accumulator",
+    ), // xor
+    (0b0111_0000, 0b1111_0000, "jump"), // 16
+    (0b1110_0000, 0b1111_1100, "loop"), // 4
 ];
 
 fn get_instruction(byte: u8) -> Option<&'static str> {
@@ -21,29 +44,24 @@ fn get_instruction(byte: u8) -> Option<&'static str> {
     panic!("Couldn't find instruction for byte {byte:#b}");
 }
 
-const REGISTER_ENCODING: [(u8, (&str, &str)); 8] = [
-    (0b000, ("al", "ax")),
-    (0b001, ("cl", "cx")),
-    (0b010, ("dl", "dx")),
-    (0b011, ("bl", "bx")),
-    (0b100, ("ah", "sp")),
-    (0b101, ("ch", "bp")),
-    (0b110, ("dh", "si")),
-    (0b111, ("bh", "di")),
+const REGISTER_ENCODING: [(&str, &str); 8] = [
+    ("al", "ax"),
+    ("cl", "cx"),
+    ("dl", "dx"),
+    ("bl", "bx"),
+    ("ah", "sp"),
+    ("ch", "bp"),
+    ("dh", "si"),
+    ("bh", "di"),
 ];
 
-fn get_register_encoding(byte: u8, word: bool) -> Option<&'static str> {
-    REGISTER_ENCODING.iter().find_map(|(key, val)| {
-        if byte == *key {
-            if word {
-                Some(val.1)
-            } else {
-                Some(val.0)
-            }
-        } else {
-            None
-        }
-    })
+fn get_register_encoding(reg: u8, word: bool) -> &'static str {
+    let reg: usize = reg.try_into().unwrap();
+    if word {
+        REGISTER_ENCODING[reg].1
+    } else {
+        REGISTER_ENCODING[reg].0
+    }
 }
 
 const EFFECTIVE_ADDRESS: [&str; 8] = [
@@ -76,25 +94,23 @@ fn main() -> io::Result<()> {
         let instruction = get_instruction(*byte).unwrap();
         //println!("; Got instruction: {instruction}.");
 
-        let assembly;
-        match instruction {
-            "mov-reg_mem-to_from-reg" => {
-                (assembly, bytes) = mov_reg_mem_to_from_reg(*byte, bytes);
+        let assembly = match instruction {
+            "mov-reg_mem-to_from-reg" => mov_reg_mem_to_from_reg(*byte, &mut bytes),
+            "mov-immediate-to-reg" => mov_immediate_to_reg(*byte, &mut bytes),
+            "mov-immediate-to-reg_mem" => mov_immediate_to_reg_mem(*byte, &mut bytes),
+            "mov-memory-to-accumulator" => mov_memory_to_accumulator(*byte, &mut bytes),
+            "mov-accumulator-to-memory" => mov_accumulator_to_memory(*byte, &mut bytes),
+            "arithmatic-reg_mem-and-reg-to-either" => {
+                arithmatic_reg_mem_and_reg_to_either(*byte, &mut bytes)
             }
-            "mov-immediate-to-reg" => {
-                (assembly, bytes) = mov_immediate_to_reg(*byte, bytes);
+            "arithmatic-immediate-to-reg_mem" => arithmatic_immediate_to_reg_mem(*byte, &mut bytes),
+            "arithmatic-immediate-with-accumulator" => {
+                arithmatic_immediate_with_accumulator(*byte, &mut bytes)
             }
-            "mov-immediate-to-reg_mem" => {
-                (assembly, bytes) = mov_immediate_to_reg_mem(*byte, bytes);
-            }
-            "mov-memory-to-accumulator" => {
-                (assembly, bytes) = mov_memory_to_accumulator(*byte, bytes);
-            }
-            "mov-accumulator-to-memory" => {
-                (assembly, bytes) = mov_accumulator_to_memory(*byte, bytes);
-            }
+            "jump" => jump(*byte, &mut bytes),
+            "loop" => r#loop(*byte, &mut bytes),
             &_ => todo!("Not yet implemented {instruction}"),
-        }
+        };
 
         println!("{assembly}");
     }
@@ -102,22 +118,255 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn mov_reg_mem_to_from_reg(
-    byte: u8,
-    mut bytes: std::slice::Iter<u8>,
-) -> (String, std::slice::Iter<u8>) {
+const LOOP_OPS: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
+
+const JUMP_OPS: [&str; 16] = [
+    "jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl",
+    "jle", "jnle",
+];
+
+fn r#loop(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+
+    data.push(*bytes.next().unwrap());
+
+    let loop_op = LOOP_OPS[<u8 as TryInto<usize>>::try_into(byte & 3).unwrap()];
+
+    let ip_inc8 = i8::from_ne_bytes(data[0..1].try_into().unwrap()) + 2;
+
+    let inc_ip = if ip_inc8 > 0 {
+        format!("$+{}+0", ip_inc8)
+    } else if ip_inc8 == 0 {
+        format!("$+0")
+    } else {
+        format!("${}+0", ip_inc8)
+    };
+
+    format!("{loop_op} {inc_ip}")
+}
+
+fn jump(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+
+    data.push(*bytes.next().unwrap());
+
+    let jump_op = JUMP_OPS[<u8 as TryInto<usize>>::try_into(byte & 15).unwrap()];
+
+    let ip_inc8 = i8::from_ne_bytes(data[0..1].try_into().unwrap()) + 2;
+
+    let inc_ip = if ip_inc8 > 0 {
+        format!("$+{}+0", ip_inc8)
+    } else if ip_inc8 == 0 {
+        format!("$+0")
+    } else {
+        format!("${}+0", ip_inc8)
+    };
+
+    format!("{jump_op} {inc_ip}")
+}
+
+const ARITHMATIC_OPS: [&str; 8] = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
+
+fn get_arithmatic_op(byte: u8) -> &'static str {
+    let index: usize = byte.try_into().unwrap();
+    ARITHMATIC_OPS[index]
+}
+
+fn arithmatic_reg_mem_and_reg_to_either(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
     let mut data: Vec<u8> = Vec::new();
     let reg_is_destination = byte & 0x2 == 0x2;
     let wide = byte & 0x1 == 0x1;
     //println!("; REG is destination: {reg_is_destination}, Operates on word: {w}");
+
+    let op = get_arithmatic_op(byte >> 3 & 7);
+
     data.push(*bytes.next().unwrap());
-    let reg = get_register_encoding((data[0] & 0b0011_1000).rotate_right(3), wide).unwrap();
-    let effective_address_formula = get_effective_address_formula(&mut data, wide, &mut bytes);
+    let reg = get_register_encoding((data[0] & 0b0011_1000).rotate_right(3), wide);
+    let effective_address_formula = get_effective_address_formula(&mut data, wide, bytes);
     if reg_is_destination {
-        (format!("mov {reg}, {effective_address_formula}"), bytes)
+        format!("{op} {reg}, {effective_address_formula}")
     } else {
-        (format!("mov {effective_address_formula}, {reg}"), bytes)
+        format!("{op} {effective_address_formula}, {reg}")
     }
+}
+
+fn mov_reg_mem_to_from_reg(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+    let reg_is_destination = byte & 0x2 == 0x2;
+    let wide = byte & 0x1 == 0x1;
+    //println!("; REG is destination: {reg_is_destination}, Operates on word: {w}");
+
+    data.push(*bytes.next().unwrap());
+    let reg = get_register_encoding((data[0] & 0b0011_1000).rotate_right(3), wide);
+    let effective_address_formula = get_effective_address_formula(&mut data, wide, bytes);
+    if reg_is_destination {
+        format!("mov {reg}, {effective_address_formula}")
+    } else {
+        format!("mov {effective_address_formula}, {reg}")
+    }
+}
+
+fn arithmatic_immediate_to_reg_mem(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+    let wide = byte & 1 == 1;
+    let signed_extension = byte & 2 == 2;
+    //println!("; MOV immediate to register: {reg}, wide: {w}");
+
+    data.push(*bytes.next().unwrap());
+
+    let op = if byte >> 3 & 7 == 6 {
+        "xor"
+    } else {
+        get_arithmatic_op(data[0] >> 3 & 7)
+    };
+
+    let effective_address_formula = get_effective_address_formula(&mut data, wide, bytes);
+
+    //println!("signed_extension: {signed_extension}, wide: {wide}");
+    data.push(*bytes.next().unwrap());
+    let immediate: String = if wide {
+        if signed_extension {
+            data.push(0);
+        } else {
+            data.push(*bytes.next().unwrap());
+        }
+
+        let len = data.len();
+        format!(
+            "{}",
+            i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
+        )
+    } else {
+        let len = data.len();
+        format!(
+            "{}",
+            i8::from_ne_bytes(data[len - 1..len].try_into().unwrap())
+        )
+    };
+
+    let width_specifier = if effective_address_formula.contains("[") {
+        if wide {
+            "word "
+        } else {
+            "byte "
+        }
+    } else {
+        ""
+    };
+
+    format!("{op} {width_specifier}{effective_address_formula}, {immediate}")
+}
+
+fn mov_immediate_to_reg_mem(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+    let wide = byte & 1 == 1;
+    //println!("; MOV immediate to register: {reg}, wide: {w}");
+
+    data.push(*bytes.next().unwrap());
+    let effective_address_formula = get_effective_address_formula(&mut data, wide, bytes);
+
+    data.push(*bytes.next().unwrap());
+    let immediate: String = if wide {
+        data.push(*bytes.next().unwrap());
+
+        let len = data.len();
+        format!(
+            "word {}",
+            i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
+        )
+    } else {
+        let len = data.len();
+        format!(
+            "byte {}",
+            i8::from_ne_bytes(data[len - 1..len].try_into().unwrap())
+        )
+    };
+
+    format!("mov {effective_address_formula}, {immediate}")
+}
+
+fn mov_accumulator_to_memory(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+    let wide = byte & 1 == 1;
+
+    data.push(*bytes.next().unwrap());
+
+    let address: u16 = if wide {
+        data.push(*bytes.next().unwrap());
+
+        u16::from_ne_bytes(data[0..2].try_into().unwrap())
+    } else {
+        u8::from_ne_bytes(data[0..1].try_into().unwrap())
+            .try_into()
+            .unwrap()
+    };
+
+    format!("mov [{address}], ax")
+}
+
+fn arithmatic_immediate_with_accumulator(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+    let wide = byte & 1 == 1;
+
+    let op = get_arithmatic_op(byte >> 3 & 7);
+
+    data.push(*bytes.next().unwrap());
+
+    let immediate: i16 = if wide {
+        data.push(*bytes.next().unwrap());
+
+        i16::from_ne_bytes(data[0..2].try_into().unwrap())
+    } else {
+        i8::from_ne_bytes(data[0..1].try_into().unwrap())
+            .try_into()
+            .unwrap()
+    };
+
+    let reg = if wide { "ax" } else { "al" };
+
+    format!("{op} {reg}, {immediate}")
+}
+
+fn mov_memory_to_accumulator(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+    let wide = byte & 1 == 1;
+
+    data.push(*bytes.next().unwrap());
+
+    let address: u16 = if wide {
+        data.push(*bytes.next().unwrap());
+
+        u16::from_ne_bytes(data[0..2].try_into().unwrap())
+    } else {
+        u8::from_ne_bytes(data[0..1].try_into().unwrap())
+            .try_into()
+            .unwrap()
+    };
+
+    format!("mov ax, [{address}]")
+}
+
+fn mov_immediate_to_reg(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+    let mut data: Vec<u8> = Vec::new();
+    let wide = (byte >> 3) & 1 == 1;
+
+    let reg = get_register_encoding(byte & 7, wide);
+    //println!("; MOV immediate to register: {reg}, wide: {w}");
+    data.push(*bytes.next().unwrap());
+
+    let immediate: i16 = if wide {
+        data.push(*bytes.next().unwrap());
+        let len = data.len();
+
+        i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
+    } else {
+        let len = data.len();
+        i8::from_ne_bytes(data[len - 1..len].try_into().unwrap())
+            .try_into()
+            .unwrap()
+    };
+
+    format!("mov {reg}, {immediate}")
 }
 
 fn get_effective_address_formula(
@@ -128,12 +377,12 @@ fn get_effective_address_formula(
     let mod_field = (data[0] & 0b1100_0000).rotate_left(2);
     let rm = data[0] & 0b0000_0111;
     match mod_field {
-        0b11 => get_register_encoding(rm, wide).unwrap().to_string(),
+        0b11 => get_register_encoding(rm, wide).to_string(),
         _ => {
             let mut address: i16 = 0;
             let effective_address_formula =
                 get_effective_address(rm.try_into().unwrap()).to_string();
-            println!("; effective_address_formula: {effective_address_formula}");
+            //println!("; effective_address_formula: {effective_address_formula}");
             if mod_field != 0 || rm == 6 {
                 data.push(*bytes.next().unwrap());
 
@@ -161,105 +410,4 @@ fn get_effective_address_formula(
             }
         }
     }
-}
-
-fn mov_immediate_to_reg_mem(
-    byte: u8,
-    mut bytes: std::slice::Iter<u8>,
-) -> (String, std::slice::Iter<u8>) {
-    let mut data: Vec<u8> = Vec::new();
-    let wide = byte & 1 == 1;
-    //println!("; MOV immediate to register: {reg}, wide: {w}");
-
-    data.push(*bytes.next().unwrap());
-    let effective_address_formula = get_effective_address_formula(&mut data, wide, &mut bytes);
-
-    data.push(*bytes.next().unwrap());
-    let immediate: String = if wide {
-        data.push(*bytes.next().unwrap());
-
-        let len = data.len();
-        format!(
-            "word {}",
-            i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
-        )
-    } else {
-        let len = data.len();
-        format!(
-            "byte {}",
-            i8::from_ne_bytes(data[len - 1..len].try_into().unwrap())
-        )
-    };
-
-    (
-        format!("mov {effective_address_formula}, {immediate}"),
-        bytes,
-    )
-}
-
-fn mov_accumulator_to_memory(
-    byte: u8,
-    mut bytes: std::slice::Iter<u8>,
-) -> (String, std::slice::Iter<u8>) {
-    let mut data: Vec<u8> = Vec::new();
-    let wide = byte & 1 == 1;
-
-    data.push(*bytes.next().unwrap());
-
-    let address: u16 = if wide {
-        data.push(*bytes.next().unwrap());
-
-        u16::from_ne_bytes(data[0..2].try_into().unwrap())
-    } else {
-        u8::from_ne_bytes(data[0..1].try_into().unwrap())
-            .try_into()
-            .unwrap()
-    };
-
-    (format!("mov [{address}], ax"), bytes)
-}
-
-fn mov_memory_to_accumulator(
-    byte: u8,
-    mut bytes: std::slice::Iter<u8>,
-) -> (String, std::slice::Iter<u8>) {
-    let mut data: Vec<u8> = Vec::new();
-    let wide = byte & 1 == 1;
-
-    data.push(*bytes.next().unwrap());
-
-    let address: u16 = if wide {
-        data.push(*bytes.next().unwrap());
-
-        u16::from_ne_bytes(data[0..2].try_into().unwrap())
-    } else {
-        u8::from_ne_bytes(data[0..1].try_into().unwrap())
-            .try_into()
-            .unwrap()
-    };
-
-    (format!("mov ax, [{address}]"), bytes)
-}
-
-fn mov_immediate_to_reg(
-    byte: u8,
-    mut bytes: std::slice::Iter<u8>,
-) -> (String, std::slice::Iter<u8>) {
-    let mut data: Vec<u8> = Vec::new();
-    let wide = (byte >> 3) & 1 == 1;
-    let reg = get_register_encoding(byte & 7, wide).unwrap();
-    //println!("; MOV immediate to register: {reg}, wide: {w}");
-    data.push(*bytes.next().unwrap());
-
-    let immediate: i16 = if wide {
-        data.push(*bytes.next().unwrap());
-
-        i16::from_ne_bytes(data[3..5].try_into().unwrap())
-    } else {
-        i8::from_ne_bytes(data[3..4].try_into().unwrap())
-            .try_into()
-            .unwrap()
-    };
-
-    (format!("mov {reg}, {immediate}"), bytes)
 }
