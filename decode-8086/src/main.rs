@@ -73,8 +73,6 @@ fn get_effective_address(rm: usize) -> &'static str {
 }
 
 fn main() -> io::Result<()> {
-    let mut buffer = Vec::new();
-
     let mut args = env::args();
     args.next();
 
@@ -83,12 +81,15 @@ fn main() -> io::Result<()> {
 
     let mut f = File::open(filename)?;
 
-    f.read_to_end(&mut buffer)?;
+    // The memory for our 8086 simulator
+    let mut memory: Vec<u8> = Vec::new();
 
-    println!("; Instruction stream is {} bytes long.", buffer.len());
+    let read_len = f.read_to_end(&mut memory[..])?;
+
+    println!("; Instruction stream is {} bytes long.", read_len);
 
     println!("\nbits 16\n");
-    let mut bytes = buffer.iter();
+    let mut bytes = memory.iter();
     while let Some(byte) = bytes.next() {
         //println!("; {_i}: {byte:#b}");
         let instruction = get_instruction(*byte).unwrap();
