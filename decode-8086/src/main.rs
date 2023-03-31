@@ -10,13 +10,9 @@ struct Memory {
 /// The memory for our 8086 simulator
 impl Memory {
     pub fn new() -> Memory {
-        let mut buffer: Vec<u8> = vec![0u8; 1024 * 1024];
-        let mut buffer = buffer.into_boxed_slice();
+        let buffer: Vec<u8> = vec![0u8; 1024 * 1024];
+        let buffer = buffer.into_boxed_slice();
         Memory { buffer }
-    }
-
-    pub fn slice(&mut self, start: usize, end: usize) -> &[u8] {
-        &self.buffer[start..end]
     }
 
     pub fn read_u8(&self, address: u16) -> u8 {
@@ -31,6 +27,7 @@ struct Cpu {
     last_instruction: usize,
 }
 
+#[derive(Copy, Clone, Debug)]
 struct Registers {
     general: [u16; 8], // 8 word sized registers
     segment: [u16; 4], // 4 word sized registers
@@ -39,9 +36,9 @@ struct Registers {
 
 impl Registers {
     pub fn new() -> Registers {
-        let mut general_registers = [0u16; 8];
+        let general_registers = [0u16; 8];
 
-        let mut segment_registers = [0u16; 4];
+        let segment_registers = [0u16; 4];
 
         Registers {
             general: general_registers,
@@ -54,12 +51,184 @@ impl Registers {
         self.segment[0]
     }
 
-    pub fn instruction_pointer(&self) -> u16 {
-        self.instruction_pointer
-    }
-
     pub fn increment_instruction_pointer(&mut self) {
         self.instruction_pointer += 1
+    }
+
+    fn set_high_byte(byte: &mut u16, value: u8) {
+        *byte &= 0x00FF; // clear high byte
+        *byte |= (value as u16) << 8; // set high byte
+    }
+
+    fn set_low_byte(byte: &mut u16, value: u8) {
+        *byte &= 0xFF00; // clear low byte
+        *byte |= value as u16; // set low byte
+    }
+
+    pub fn set_register(&mut self, register: Register, value: RegisterValue) {
+        match (register, value) {
+            (Register::Ax, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Bx, RegisterValue::Word(value)) => self.general[1] = value,
+            (Register::Cx, RegisterValue::Word(value)) => self.general[2] = value,
+            (Register::Dx, RegisterValue::Word(value)) => self.general[3] = value,
+            (Register::Ah, RegisterValue::Byte(value)) => {
+                Registers::set_high_byte(&mut self.general[0], value)
+            }
+            (Register::Bh, RegisterValue::Byte(value)) => {
+                Registers::set_high_byte(&mut self.general[1], value)
+            }
+            (Register::Ch, RegisterValue::Byte(value)) => {
+                Registers::set_high_byte(&mut self.general[2], value)
+            }
+            (Register::Dh, RegisterValue::Byte(value)) => {
+                Registers::set_high_byte(&mut self.general[3], value)
+            }
+            (Register::Al, RegisterValue::Byte(value)) => {
+                Registers::set_low_byte(&mut self.general[0], value)
+            }
+            (Register::Bl, RegisterValue::Byte(value)) => {
+                Registers::set_low_byte(&mut self.general[1], value)
+            }
+            (Register::Cl, RegisterValue::Byte(value)) => {
+                Registers::set_low_byte(&mut self.general[2], value)
+            }
+            (Register::Dl, RegisterValue::Byte(value)) => {
+                Registers::set_low_byte(&mut self.general[3], value)
+            }
+            (Register::Sp, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Bp, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Si, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Di, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Cs, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Ds, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Ss, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Es, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Ip, RegisterValue::Word(value)) => self.general[0] = value,
+            (register, value) => panic!("Register {register:?} can't take a {value:?}"),
+        }
+    }
+
+    pub fn get_register(&self, register: Register) -> RegisterValue {
+        match register {
+            Register::Ax => RegisterValue::Word(self.general[0]),
+            Register::Bx => RegisterValue::Word(self.general[1]),
+            Register::Cx => RegisterValue::Word(self.general[2]),
+            Register::Dx => RegisterValue::Word(self.general[3]),
+            Register::Ah => RegisterValue::Byte(self.general[0].to_be_bytes()[0]),
+            Register::Bh => RegisterValue::Byte(self.general[1].to_be_bytes()[0]),
+            Register::Ch => RegisterValue::Byte(self.general[2].to_be_bytes()[0]),
+            Register::Dh => RegisterValue::Byte(self.general[3].to_be_bytes()[0]),
+            Register::Al => RegisterValue::Byte(self.general[0].to_be_bytes()[1]),
+            Register::Bl => RegisterValue::Byte(self.general[1].to_be_bytes()[1]),
+            Register::Cl => RegisterValue::Byte(self.general[2].to_be_bytes()[1]),
+            Register::Dl => RegisterValue::Byte(self.general[3].to_be_bytes()[1]),
+            Register::Sp => RegisterValue::Word(self.general[4]),
+            Register::Bp => RegisterValue::Word(self.general[5]),
+            Register::Si => RegisterValue::Word(self.general[6]),
+            Register::Di => RegisterValue::Word(self.general[7]),
+            Register::Cs => RegisterValue::Word(self.segment[0]),
+            Register::Ds => RegisterValue::Word(self.segment[1]),
+            Register::Ss => RegisterValue::Word(self.segment[2]),
+            Register::Es => RegisterValue::Word(self.segment[3]),
+            Register::Ip => RegisterValue::Word(self.instruction_pointer),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Register {
+    Ax,
+    Bx,
+    Cx,
+    Dx,
+    Ah,
+    Bh,
+    Ch,
+    Dh,
+    Al,
+    Bl,
+    Cl,
+    Dl,
+    Sp,
+    Bp,
+    Si,
+    Di,
+    Cs,
+    Ds,
+    Ss,
+    Es,
+    Ip,
+}
+
+impl std::fmt::Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Register::Ax => write!(f, "ax"),
+            Register::Bx => write!(f, "bx"),
+            Register::Cx => write!(f, "cx"),
+            Register::Dx => write!(f, "dx"),
+            Register::Ah => write!(f, "ah"),
+            Register::Bh => write!(f, "bh"),
+            Register::Ch => write!(f, "ch"),
+            Register::Dh => write!(f, "dh"),
+            Register::Al => write!(f, "al"),
+            Register::Bl => write!(f, "bl"),
+            Register::Cl => write!(f, "cl"),
+            Register::Dl => write!(f, "dl"),
+            Register::Sp => write!(f, "sp"),
+            Register::Si => write!(f, "si"),
+            Register::Di => write!(f, "di"),
+            Register::Ds => write!(f, "ds"),
+            Register::Bp => write!(f, "bp"),
+            Register::Cs => write!(f, "cs"),
+            Register::Ss => write!(f, "ss"),
+            Register::Es => write!(f, "es"),
+            Register::Ip => write!(f, "ip"),
+        }
+    }
+}
+
+impl Register {
+    pub fn from_str(register: &str) -> Register {
+        match &register.to_lowercase()[..] {
+            "ax" => Register::Ax,
+            "bx" => Register::Bx,
+            "cx" => Register::Cx,
+            "dx" => Register::Dx,
+            "al" => Register::Al,
+            "bl" => Register::Bl,
+            "cl" => Register::Cl,
+            "dl" => Register::Dl,
+            "ah" => Register::Ah,
+            "bh" => Register::Bh,
+            "ch" => Register::Ch,
+            "dh" => Register::Dh,
+            "sp" => Register::Sp,
+            "bp" => Register::Bp,
+            "si" => Register::Si,
+            "di" => Register::Di,
+            "cs" => Register::Cs,
+            "ds" => Register::Ds,
+            "ss" => Register::Ss,
+            "es" => Register::Es,
+            "ip" => Register::Ip,
+            register => panic!("Unknown register: {register}"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum RegisterValue {
+    Byte(u8),
+    Word(u16),
+}
+
+impl std::fmt::Display for RegisterValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            RegisterValue::Byte(value) => write!(f, "{:#x}", value),
+            RegisterValue::Word(value) => write!(f, "{:#x}", value),
+        }
     }
 }
 
@@ -83,23 +252,140 @@ impl Cpu {
     }
 
     pub fn next_instruction(&mut self) -> Option<u8> {
-        let next_instruction = self
-            .memory
-            .read_u8(self.registers.code_segment() * 64 + self.registers.instruction_pointer());
-        self.registers.increment_instruction_pointer();
-        if self.last_instruction < self.registers.instruction_pointer.try_into().unwrap() {
-            None
+        if let RegisterValue::Word(ip) = self.registers.get_register(Register::Ip) {
+            let next_instruction = self.memory.read_u8(self.registers.code_segment() * 64 + ip);
+            self.registers.increment_instruction_pointer();
+            if self.last_instruction < self.registers.instruction_pointer.try_into().unwrap() {
+                None
+            } else {
+                Some(next_instruction)
+            }
         } else {
-            Some(next_instruction)
+            None
         }
     }
 
     pub fn execute(&mut self, instruction: &Instruction) {
+        //print_comment(format!("Going to execute instruction: {instruction:?}"));
+        print!("{}", instruction.str_rep);
+        let pre_op_registers = self.registers.clone();
         match &instruction.op {
             Operation::MovImmediateToRegister => {
-                print_comment(format!("Going to execute instruction: {instruction:?}"));
+                match (&instruction.operands.left, &instruction.operands.right) {
+                    (Operand::Register(register), Operand::ImmediateWord(value)) => {
+                        self.registers
+                            .set_register(*register, RegisterValue::Word(*value));
+                    }
+                    (Operand::Register(register), Operand::ImmediateByte(value)) => {
+                        self.registers
+                            .set_register(*register, RegisterValue::Byte(*value));
+                    }
+                    (left, right) => {
+                        panic!(
+                            "{:?} not defined for operands: ({left:?}, {right:?})",
+                            instruction.op
+                        )
+                    }
+                }
             }
-            op => panic!("Execution not defined for operation: {op:?}"),
+        }
+        let post_op_registers = self.registers.clone();
+        register_changed(Register::Ax, pre_op_registers, post_op_registers);
+        register_changed(Register::Bx, pre_op_registers, post_op_registers);
+        register_changed(Register::Cx, pre_op_registers, post_op_registers);
+        register_changed(Register::Dx, pre_op_registers, post_op_registers);
+        register_changed(Register::Sp, pre_op_registers, post_op_registers);
+        register_changed(Register::Bp, pre_op_registers, post_op_registers);
+        register_changed(Register::Si, pre_op_registers, post_op_registers);
+        register_changed(Register::Di, pre_op_registers, post_op_registers);
+        register_changed(Register::Cs, pre_op_registers, post_op_registers);
+        register_changed(Register::Ds, pre_op_registers, post_op_registers);
+        register_changed(Register::Ss, pre_op_registers, post_op_registers);
+        register_changed(Register::Es, pre_op_registers, post_op_registers);
+        register_changed(Register::Ip, pre_op_registers, post_op_registers);
+    }
+}
+
+fn register_changed(register: Register, pre: Registers, post: Registers) {
+    match register {
+        Register::Ax => {
+            let pre_h = pre.get_register(Register::Ah);
+            let post_h = post.get_register(Register::Ah);
+            let pre_l = pre.get_register(Register::Al);
+            let post_l = post.get_register(Register::Al);
+            if pre_h != post_h && pre_l != post_l {
+                println!(
+                    " ; {}:{}->{}",
+                    Register::Ax,
+                    pre.get_register(Register::Ax),
+                    post.get_register(Register::Ax)
+                );
+            } else if pre_h != post_h {
+                println!(" ; {}:{}->{}", Register::Ah, pre_h, post_h);
+            } else if pre_l != post_l {
+                println!(" ; {}:{}->{}", Register::Al, pre_l, post_l);
+            }
+        }
+        Register::Bx => {
+            let pre_h = pre.get_register(Register::Bh);
+            let post_h = post.get_register(Register::Bh);
+            let pre_l = pre.get_register(Register::Bl);
+            let post_l = post.get_register(Register::Bl);
+            if pre_h != post_h && pre_l != post_l {
+                println!(
+                    " ; {}:{}->{}",
+                    Register::Bx,
+                    pre.get_register(Register::Bx),
+                    post.get_register(Register::Bx)
+                );
+            } else if pre_h != post_h {
+                println!(" ; {}:{}->{}", Register::Bh, pre_h, post_h);
+            } else if pre_l != post_l {
+                println!(" ; {}:{}->{}", Register::Bl, pre_l, post_l);
+            }
+        }
+        Register::Cx => {
+            let pre_h = pre.get_register(Register::Ch);
+            let post_h = post.get_register(Register::Ch);
+            let pre_l = pre.get_register(Register::Cl);
+            let post_l = post.get_register(Register::Cl);
+            if pre_h != post_h && pre_l != post_l {
+                println!(
+                    " ; {}:{}->{}",
+                    Register::Cx,
+                    pre.get_register(Register::Cx),
+                    post.get_register(Register::Cx)
+                );
+            } else if pre_h != post_h {
+                println!(" ; {}:{}->{}", Register::Ch, pre_h, post_h);
+            } else if pre_l != post_l {
+                println!(" ; {}:{}->{}", Register::Cl, pre_l, post_l);
+            }
+        }
+        Register::Dx => {
+            let pre_h = pre.get_register(Register::Dh);
+            let post_h = post.get_register(Register::Dh);
+            let pre_l = pre.get_register(Register::Dl);
+            let post_l = post.get_register(Register::Dl);
+            if pre_h != post_h && pre_l != post_l {
+                println!(
+                    " ; {}:{}->{}",
+                    Register::Dx,
+                    pre.get_register(Register::Dx),
+                    post.get_register(Register::Dx)
+                );
+            } else if pre_h != post_h {
+                println!(" ; {}:{}->{}", Register::Dh, pre_h, post_h);
+            } else if pre_l != post_l {
+                println!(" ; {}:{}->{}", Register::Dl, pre_l, post_l);
+            }
+        }
+        register => {
+            let pre = pre.get_register(register);
+            let post = post.get_register(register);
+            if pre != post {
+                println!(" ; {}:{}->{}", register, pre, post);
+            }
         }
     }
 }
@@ -109,10 +395,6 @@ struct Instruction {
     op: Operation,
     operands: Operands,
     str_rep: String,
-}
-
-impl Instruction {
-    pub fn execute(&self, memory: &mut Memory) {}
 }
 
 #[derive(Debug)]
@@ -128,8 +410,9 @@ enum Operation {
 
 #[derive(Debug)]
 enum Operand {
-    Register(String),
-    Immediate(i16),
+    Register(Register),
+    ImmediateByte(u8),
+    ImmediateWord(u16),
 }
 
 const OPCODES: [(u8, u8, &str); 12] = [
@@ -225,7 +508,6 @@ fn main() -> io::Result<()> {
     // so we can easily re-encode our decode to test.
     println!("\nbits 16\n");
 
-    let mut instructions_read = 0;
     while let Some(byte) = cpu.next_instruction() {
         let instruction = get_instruction(byte).unwrap();
 
@@ -234,7 +516,7 @@ fn main() -> io::Result<()> {
             "mov-immediate-to-reg" => {
                 let instruction = mov_immediate_to_reg(byte, &mut cpu);
                 cpu.execute(&instruction);
-                instruction.str_rep
+                "".to_string()
             }
             "mov-immediate-to-reg_mem" => mov_immediate_to_reg_mem(byte, &mut cpu),
             "mov-memory-to-accumulator" => mov_memory_to_accumulator(byte, &mut cpu),
@@ -252,7 +534,6 @@ fn main() -> io::Result<()> {
         };
 
         println!("{assembly}");
-        instructions_read += 1;
     }
 
     Ok(())
@@ -512,8 +793,12 @@ fn mov_immediate_to_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
     Instruction {
         op: Operation::MovImmediateToRegister,
         operands: Operands {
-            left: Operand::Register(reg.to_string()),
-            right: Operand::Immediate(immediate),
+            left: Operand::Register(Register::from_str(reg)),
+            right: if wide {
+                Operand::ImmediateWord(immediate as u16)
+            } else {
+                Operand::ImmediateByte(immediate as u8)
+            },
         },
         str_rep: format!("mov {reg}, {immediate}"),
     }
