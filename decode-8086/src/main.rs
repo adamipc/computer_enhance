@@ -3,6 +3,135 @@ use std::fs::File;
 use std::io;
 use std::io::Read;
 
+struct Memory {
+    buffer: Box<[u8]>,
+}
+
+/// The memory for our 8086 simulator
+impl Memory {
+    pub fn new() -> Memory {
+        let mut buffer: Vec<u8> = vec![0u8; 1024 * 1024];
+        let mut buffer = buffer.into_boxed_slice();
+        Memory { buffer }
+    }
+
+    pub fn slice(&mut self, start: usize, end: usize) -> &[u8] {
+        &self.buffer[start..end]
+    }
+
+    pub fn read_u8(&self, address: u16) -> u8 {
+        let address: usize = address.try_into().unwrap();
+        self.buffer[address]
+    }
+}
+
+struct Cpu {
+    memory: Memory,
+    registers: Registers,
+    last_instruction: usize,
+}
+
+struct Registers {
+    general: [u16; 8], // 8 word sized registers
+    segment: [u16; 4], // 4 word sized registers
+    instruction_pointer: u16,
+}
+
+impl Registers {
+    pub fn new() -> Registers {
+        let mut general_registers = [0u16; 8];
+
+        let mut segment_registers = [0u16; 4];
+
+        Registers {
+            general: general_registers,
+            segment: segment_registers,
+            instruction_pointer: 0,
+        }
+    }
+
+    pub fn code_segment(&self) -> u16 {
+        self.segment[0]
+    }
+
+    pub fn instruction_pointer(&self) -> u16 {
+        self.instruction_pointer
+    }
+
+    pub fn increment_instruction_pointer(&mut self) {
+        self.instruction_pointer += 1
+    }
+}
+
+impl Cpu {
+    pub fn new() -> Cpu {
+        Cpu {
+            memory: Memory::new(),
+            registers: Registers::new(),
+            last_instruction: 0,
+        }
+    }
+
+    pub fn read_file_into_memory(
+        &mut self,
+        f: &mut File,
+        offset: usize,
+    ) -> Result<usize, std::io::Error> {
+        let read_len = f.read(&mut self.memory.buffer[offset..])?;
+        self.last_instruction = offset + read_len;
+        Ok(read_len)
+    }
+
+    pub fn next_instruction(&mut self) -> Option<u8> {
+        let next_instruction = self
+            .memory
+            .read_u8(self.registers.code_segment() * 64 + self.registers.instruction_pointer());
+        self.registers.increment_instruction_pointer();
+        if self.last_instruction < self.registers.instruction_pointer.try_into().unwrap() {
+            None
+        } else {
+            Some(next_instruction)
+        }
+    }
+
+    pub fn execute(&mut self, instruction: &Instruction) {
+        match &instruction.op {
+            Operation::MovImmediateToRegister => {
+                print_comment(format!("Going to execute instruction: {instruction:?}"));
+            }
+            op => panic!("Execution not defined for operation: {op:?}"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Instruction {
+    op: Operation,
+    operands: Operands,
+    str_rep: String,
+}
+
+impl Instruction {
+    pub fn execute(&self, memory: &mut Memory) {}
+}
+
+#[derive(Debug)]
+struct Operands {
+    left: Operand,
+    right: Operand,
+}
+
+#[derive(Debug)]
+enum Operation {
+    MovImmediateToRegister,
+}
+
+#[derive(Debug)]
+enum Operand {
+    Register(String),
+    Immediate(i16),
+}
+
 const OPCODES: [(u8, u8, &str); 12] = [
     (0b1000_1000, 0b1111_1100, "mov-reg_mem-to_from-reg"),
     (0b1011_0000, 0b1111_0000, "mov-immediate-to-reg"),
@@ -72,6 +201,11 @@ fn get_effective_address(rm: usize) -> &'static str {
     EFFECTIVE_ADDRESS[rm]
 }
 
+/// Prints a `comment` to our decoded assembly
+fn print_comment(comment: String) {
+    println!("; {comment}");
+}
+
 fn main() -> io::Result<()> {
     let mut args = env::args();
     args.next();
@@ -81,39 +215,44 @@ fn main() -> io::Result<()> {
 
     let mut f = File::open(filename)?;
 
-    // The memory for our 8086 simulator
-    let mut memory: Vec<u8> = Vec::new();
+    let mut cpu = Cpu::new();
 
-    let read_len = f.read_to_end(&mut memory[..])?;
+    let read_len = cpu.read_file_into_memory(&mut f, 0)?;
 
     println!("; Instruction stream is {} bytes long.", read_len);
 
+    // Tell NASM to encode our ASM using basic 16bit instructions
+    // so we can easily re-encode our decode to test.
     println!("\nbits 16\n");
-    let mut bytes = memory.iter();
-    while let Some(byte) = bytes.next() {
-        //println!("; {_i}: {byte:#b}");
-        let instruction = get_instruction(*byte).unwrap();
-        //println!("; Got instruction: {instruction}.");
+
+    let mut instructions_read = 0;
+    while let Some(byte) = cpu.next_instruction() {
+        let instruction = get_instruction(byte).unwrap();
 
         let assembly = match instruction {
-            "mov-reg_mem-to_from-reg" => mov_reg_mem_to_from_reg(*byte, &mut bytes),
-            "mov-immediate-to-reg" => mov_immediate_to_reg(*byte, &mut bytes),
-            "mov-immediate-to-reg_mem" => mov_immediate_to_reg_mem(*byte, &mut bytes),
-            "mov-memory-to-accumulator" => mov_memory_to_accumulator(*byte, &mut bytes),
-            "mov-accumulator-to-memory" => mov_accumulator_to_memory(*byte, &mut bytes),
+            "mov-reg_mem-to_from-reg" => mov_reg_mem_to_from_reg(byte, &mut cpu),
+            "mov-immediate-to-reg" => {
+                let instruction = mov_immediate_to_reg(byte, &mut cpu);
+                cpu.execute(&instruction);
+                instruction.str_rep
+            }
+            "mov-immediate-to-reg_mem" => mov_immediate_to_reg_mem(byte, &mut cpu),
+            "mov-memory-to-accumulator" => mov_memory_to_accumulator(byte, &mut cpu),
+            "mov-accumulator-to-memory" => mov_accumulator_to_memory(byte, &mut cpu),
             "arithmatic-reg_mem-and-reg-to-either" => {
-                arithmatic_reg_mem_and_reg_to_either(*byte, &mut bytes)
+                arithmatic_reg_mem_and_reg_to_either(byte, &mut cpu)
             }
-            "arithmatic-immediate-to-reg_mem" => arithmatic_immediate_to_reg_mem(*byte, &mut bytes),
+            "arithmatic-immediate-to-reg_mem" => arithmatic_immediate_to_reg_mem(byte, &mut cpu),
             "arithmatic-immediate-with-accumulator" => {
-                arithmatic_immediate_with_accumulator(*byte, &mut bytes)
+                arithmatic_immediate_with_accumulator(byte, &mut cpu)
             }
-            "jump" => jump(*byte, &mut bytes),
-            "loop" => r#loop(*byte, &mut bytes),
+            "jump" => jump(byte, &mut cpu),
+            "loop" => r#loop(byte, &mut cpu),
             &_ => todo!("Not yet implemented {instruction}"),
         };
 
         println!("{assembly}");
+        instructions_read += 1;
     }
 
     Ok(())
@@ -126,10 +265,10 @@ const JUMP_OPS: [&str; 16] = [
     "jle", "jnle",
 ];
 
-fn r#loop(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn r#loop(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
 
     let loop_op = LOOP_OPS[<u8 as TryInto<usize>>::try_into(byte & 3).unwrap()];
 
@@ -146,10 +285,10 @@ fn r#loop(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
     format!("{loop_op} {inc_ip}")
 }
 
-fn jump(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn jump(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
 
     let jump_op = JUMP_OPS[<u8 as TryInto<usize>>::try_into(byte & 15).unwrap()];
 
@@ -173,17 +312,17 @@ fn get_arithmatic_op(byte: u8) -> &'static str {
     ARITHMATIC_OPS[index]
 }
 
-fn arithmatic_reg_mem_and_reg_to_either(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
     let reg_is_destination = byte & 0x2 == 0x2;
     let wide = byte & 0x1 == 0x1;
-    //println!("; REG is destination: {reg_is_destination}, Operates on word: {w}");
+    //print_cmment("REG is destination: {reg_is_destination}, Operates on word: {w}");
 
     let op = get_arithmatic_op(byte >> 3 & 7);
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
     let reg = get_register_encoding((data[0] & 0b0011_1000).rotate_right(3), wide);
-    let effective_address_formula = get_effective_address_formula(&mut data, wide, bytes);
+    let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
     if reg_is_destination {
         format!("{op} {reg}, {effective_address_formula}")
     } else {
@@ -191,15 +330,17 @@ fn arithmatic_reg_mem_and_reg_to_either(byte: u8, bytes: &mut std::slice::Iter<u
     }
 }
 
-fn mov_reg_mem_to_from_reg(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn mov_reg_mem_to_from_reg(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
     let reg_is_destination = byte & 0x2 == 0x2;
     let wide = byte & 0x1 == 0x1;
-    //println!("; REG is destination: {reg_is_destination}, Operates on word: {w}");
+    print_comment(format!(
+        "REG is destination: {reg_is_destination}, Operates on word: {wide}"
+    ));
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
     let reg = get_register_encoding((data[0] & 0b0011_1000).rotate_right(3), wide);
-    let effective_address_formula = get_effective_address_formula(&mut data, wide, bytes);
+    let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
     if reg_is_destination {
         format!("mov {reg}, {effective_address_formula}")
     } else {
@@ -207,13 +348,12 @@ fn mov_reg_mem_to_from_reg(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String
     }
 }
 
-fn arithmatic_immediate_to_reg_mem(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
     let signed_extension = byte & 2 == 2;
-    //println!("; MOV immediate to register: {reg}, wide: {w}");
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
 
     let op = if byte >> 3 & 7 == 6 {
         "xor"
@@ -221,15 +361,17 @@ fn arithmatic_immediate_to_reg_mem(byte: u8, bytes: &mut std::slice::Iter<u8>) -
         get_arithmatic_op(data[0] >> 3 & 7)
     };
 
-    let effective_address_formula = get_effective_address_formula(&mut data, wide, bytes);
+    let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
 
-    //println!("signed_extension: {signed_extension}, wide: {wide}");
-    data.push(*bytes.next().unwrap());
+    print_comment(format!(
+        "signed_extension: {signed_extension}, wide: {wide}"
+    ));
+    data.push(cpu.next_instruction().unwrap());
     let immediate: String = if wide {
         if signed_extension {
             data.push(0);
         } else {
-            data.push(*bytes.next().unwrap());
+            data.push(cpu.next_instruction().unwrap());
         }
 
         let len = data.len();
@@ -258,17 +400,17 @@ fn arithmatic_immediate_to_reg_mem(byte: u8, bytes: &mut std::slice::Iter<u8>) -
     format!("{op} {width_specifier}{effective_address_formula}, {immediate}")
 }
 
-fn mov_immediate_to_reg_mem(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn mov_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
     //println!("; MOV immediate to register: {reg}, wide: {w}");
 
-    data.push(*bytes.next().unwrap());
-    let effective_address_formula = get_effective_address_formula(&mut data, wide, bytes);
+    data.push(cpu.next_instruction().unwrap());
+    let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
     let immediate: String = if wide {
-        data.push(*bytes.next().unwrap());
+        data.push(cpu.next_instruction().unwrap());
 
         let len = data.len();
         format!(
@@ -286,14 +428,14 @@ fn mov_immediate_to_reg_mem(byte: u8, bytes: &mut std::slice::Iter<u8>) -> Strin
     format!("mov {effective_address_formula}, {immediate}")
 }
 
-fn mov_accumulator_to_memory(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn mov_accumulator_to_memory(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
 
     let address: u16 = if wide {
-        data.push(*bytes.next().unwrap());
+        data.push(cpu.next_instruction().unwrap());
 
         u16::from_ne_bytes(data[0..2].try_into().unwrap())
     } else {
@@ -305,16 +447,16 @@ fn mov_accumulator_to_memory(byte: u8, bytes: &mut std::slice::Iter<u8>) -> Stri
     format!("mov [{address}], ax")
 }
 
-fn arithmatic_immediate_with_accumulator(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn arithmatic_immediate_with_accumulator(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
 
     let op = get_arithmatic_op(byte >> 3 & 7);
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
 
     let immediate: i16 = if wide {
-        data.push(*bytes.next().unwrap());
+        data.push(cpu.next_instruction().unwrap());
 
         i16::from_ne_bytes(data[0..2].try_into().unwrap())
     } else {
@@ -328,14 +470,14 @@ fn arithmatic_immediate_with_accumulator(byte: u8, bytes: &mut std::slice::Iter<
     format!("{op} {reg}, {immediate}")
 }
 
-fn mov_memory_to_accumulator(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn mov_memory_to_accumulator(byte: u8, cpu: &mut Cpu) -> String {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
 
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
 
     let address: u16 = if wide {
-        data.push(*bytes.next().unwrap());
+        data.push(cpu.next_instruction().unwrap());
 
         u16::from_ne_bytes(data[0..2].try_into().unwrap())
     } else {
@@ -347,16 +489,16 @@ fn mov_memory_to_accumulator(byte: u8, bytes: &mut std::slice::Iter<u8>) -> Stri
     format!("mov ax, [{address}]")
 }
 
-fn mov_immediate_to_reg(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
+fn mov_immediate_to_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let wide = (byte >> 3) & 1 == 1;
 
     let reg = get_register_encoding(byte & 7, wide);
     //println!("; MOV immediate to register: {reg}, wide: {w}");
-    data.push(*bytes.next().unwrap());
+    data.push(cpu.next_instruction().unwrap());
 
     let immediate: i16 = if wide {
-        data.push(*bytes.next().unwrap());
+        data.push(cpu.next_instruction().unwrap());
         let len = data.len();
 
         i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
@@ -367,14 +509,17 @@ fn mov_immediate_to_reg(byte: u8, bytes: &mut std::slice::Iter<u8>) -> String {
             .unwrap()
     };
 
-    format!("mov {reg}, {immediate}")
+    Instruction {
+        op: Operation::MovImmediateToRegister,
+        operands: Operands {
+            left: Operand::Register(reg.to_string()),
+            right: Operand::Immediate(immediate),
+        },
+        str_rep: format!("mov {reg}, {immediate}"),
+    }
 }
 
-fn get_effective_address_formula(
-    data: &mut Vec<u8>,
-    wide: bool,
-    bytes: &mut std::slice::Iter<u8>,
-) -> String {
+fn get_effective_address_formula(data: &mut Vec<u8>, wide: bool, cpu: &mut Cpu) -> String {
     let mod_field = (data[0] & 0b1100_0000).rotate_left(2);
     let rm = data[0] & 0b0000_0111;
     match mod_field {
@@ -385,12 +530,12 @@ fn get_effective_address_formula(
                 get_effective_address(rm.try_into().unwrap()).to_string();
             //println!("; effective_address_formula: {effective_address_formula}");
             if mod_field != 0 || rm == 6 {
-                data.push(*bytes.next().unwrap());
+                data.push(cpu.next_instruction().unwrap());
 
                 let mut effective_address_word = false;
                 if mod_field != 1 {
                     effective_address_word = true;
-                    data.push(*bytes.next().unwrap());
+                    data.push(cpu.next_instruction().unwrap());
                 }
 
                 if effective_address_word {
