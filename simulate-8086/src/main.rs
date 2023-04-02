@@ -27,7 +27,11 @@ impl Memory {
     pub fn set_address(&mut self, address: Address, value: MemoryValue) {
         match value {
             MemoryValue::Byte(value) => self.buffer[address.to_memory_address().address] = value,
-            _ => panic!("Can't set memory address to value: {:?}", value),
+            MemoryValue::Word(value) => {
+                let address = address.to_memory_address().address;
+                self.buffer[address] = (value >> 8) as u8;
+                self.buffer[address + 1] = value as u8;
+            }
         }
     }
 }
@@ -37,6 +41,16 @@ enum Address {
     Register(Register),
     EffectiveFormula(EffectiveAddress),
     MemoryAddress(MemoryAddress),
+}
+
+impl std::fmt::Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Register(register) => write!(f, "{}", register),
+            Self::EffectiveFormula(formula) => write!(f, "{}", formula),
+            Self::MemoryAddress(address) => write!(f, "{}", address),
+        }
+    }
 }
 
 impl Address {
@@ -58,6 +72,12 @@ struct MemoryAddress {
     address: usize,
 }
 
+impl std::fmt::Display for MemoryAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]", self.address)
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum EffectiveAddress {
     BxSi(u16),
@@ -68,6 +88,21 @@ enum EffectiveAddress {
     Di(u16),
     Bp(u16),
     Bx(u16),
+}
+
+impl std::fmt::Display for EffectiveAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::BxSi(displacement) => write!(f, "[bx+si+{}]", displacement),
+            Self::BxDi(displacement) => write!(f, "[bx+di+{}]", displacement),
+            Self::BpSi(displacement) => write!(f, "[bp+si+{}]", displacement),
+            Self::BpDi(displacement) => write!(f, "[bp+di+{}]", displacement),
+            Self::Si(displacement) => write!(f, "[si+{}]", displacement),
+            Self::Di(displacement) => write!(f, "[di+{}]", displacement),
+            Self::Bp(displacement) => write!(f, "[bp+{}]", displacement),
+            Self::Bx(displacement) => write!(f, "[bx+{}]", displacement),
+        }
+    }
 }
 
 impl EffectiveAddress {
@@ -380,6 +415,15 @@ impl Cpu {
                                 .get_address(effective_address.to_memory_address()),
                         );
                     }
+                    (
+                        Operand::Address(Address::Register(dest_register)),
+                        Operand::Register(source_register),
+                    ) => {
+                        self.registers.set_register(
+                            *dest_register,
+                            self.registers.get_register(*source_register),
+                        );
+                    }
                     (Operand::Address(effective_address), Operand::Register(register)) => {
                         self.memory.set_address(
                             *effective_address,
@@ -456,6 +500,11 @@ impl Cpu {
             "\tsp: 0x{:04x} ({})",
             self.registers.get_register(Register::Sp),
             self.registers.get_register(Register::Sp)
+        );
+        println!(
+            "\tbp: 0x{:04x} ({})",
+            self.registers.get_register(Register::Bp),
+            self.registers.get_register(Register::Bp)
         );
         println!(
             "\tsi: 0x{:04x} ({})",
@@ -882,7 +931,7 @@ fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> Instruction 
                 left: Operand::Register(Register::from_str(reg)),
                 right: Operand::Address(effective_address_formula),
             },
-            str_rep: format!("{op:?} {reg}, {effective_address_formula:?}"),
+            str_rep: format!("{op:?} {reg}, {effective_address_formula}"),
         }
     } else {
         Instruction {
@@ -891,7 +940,7 @@ fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> Instruction 
                 left: Operand::Address(effective_address_formula),
                 right: Operand::Register(Register::from_str(reg)),
             },
-            str_rep: format!("{op:?} {effective_address_formula:?}, {reg}"),
+            str_rep: format!("{op:?} {effective_address_formula}, {reg}"),
         }
     }
 }
@@ -900,9 +949,9 @@ fn mov_reg_mem_to_from_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let reg_is_destination = byte & 0x2 == 0x2;
     let wide = byte & 0x1 == 0x1;
-    print_comment(format!(
-        "REG is destination: {reg_is_destination}, Operates on word: {wide}"
-    ));
+    //print_comment(format!(
+    //    "REG is destination: {reg_is_destination}, Operates on word: {wide}"
+    //));
 
     data.push(cpu.next_instruction().unwrap());
     let reg = get_register_encoding((data[0] & 0b0011_1000).rotate_right(3), wide);
@@ -914,7 +963,7 @@ fn mov_reg_mem_to_from_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
                 left: Operand::Register(Register::from_str(reg)),
                 right: Operand::Address(effective_address_formula),
             },
-            str_rep: format!("mov {reg}, {effective_address_formula:?}"),
+            str_rep: format!("mov {reg}, {effective_address_formula}"),
         }
     } else {
         Instruction {
@@ -923,7 +972,7 @@ fn mov_reg_mem_to_from_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
                 left: Operand::Address(effective_address_formula),
                 right: Operand::Register(Register::from_str(reg)),
             },
-            str_rep: format!("mov {effective_address_formula:?}, {reg}"),
+            str_rep: format!("mov {effective_address_formula}, {reg}"),
         }
     }
 }
@@ -964,7 +1013,7 @@ fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> Instruction {
     let width_specifier = if wide { "word " } else { "byte " };
 
     Instruction {
-        str_rep: format!("{op:?} {width_specifier}{effective_address_formula:?}, {immediate}"),
+        str_rep: format!("{op:?} {width_specifier}{effective_address_formula}, {immediate}"),
         op: Operation::ArithmaticImmediateToRegisterOrMemory(op, wide),
         operands: Operands {
             left: Operand::Address(effective_address_formula),
@@ -993,7 +1042,7 @@ fn mov_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> Instruction {
     };
 
     Instruction {
-        str_rep: format!("mov {effective_address_formula:?}, {immediate}"),
+        str_rep: format!("mov {effective_address_formula}, {immediate}"),
         op: Operation::MoveImmediateToRegisterOrMemory(wide),
         operands: Operands {
             left: Operand::Address(effective_address_formula),
