@@ -1,7 +1,7 @@
+use std::cmp::{Ord, Ordering};
 use std::env;
 use std::fs::File;
-use std::io;
-use std::io::Read;
+use std::io::{self, Read};
 
 struct Memory {
     buffer: Box<[u8]>,
@@ -18,6 +18,78 @@ impl Memory {
     pub fn read_u8(&self, address: u16) -> u8 {
         let address: usize = address.try_into().unwrap();
         self.buffer[address]
+    }
+
+    pub fn get_address(&self, address: MemoryAddress) -> MemoryValue {
+        MemoryValue::Byte(self.buffer[address.address])
+    }
+
+    pub fn set_address(&mut self, address: Address, value: MemoryValue) {
+        match value {
+            MemoryValue::Byte(value) => self.buffer[address.to_memory_address().address] = value,
+            _ => panic!("Can't set memory address to value: {:?}", value),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum Address {
+    Register(Register),
+    EffectiveFormula(EffectiveAddress),
+    MemoryAddress(MemoryAddress),
+}
+
+impl Address {
+    pub fn to_memory_address(self) -> MemoryAddress {
+        match self {
+            Self::Register(register) => {
+                panic!("Can't get memory address for register: {}", register)
+            }
+            Self::MemoryAddress(address) => address,
+            Self::EffectiveFormula(effective_address) => MemoryAddress {
+                address: effective_address.to_memory_address(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+struct MemoryAddress {
+    address: usize,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum EffectiveAddress {
+    BxSi(u16),
+    BxDi(u16),
+    BpSi(u16),
+    BpDi(u16),
+    Si(u16),
+    Di(u16),
+    Bp(u16),
+    Bx(u16),
+}
+
+impl EffectiveAddress {
+    pub fn from_str(effective_address_formula: String, displacement: u16) -> EffectiveAddress {
+        match effective_address_formula.as_str() {
+            "bx+si" => EffectiveAddress::BxSi(displacement),
+            "bx+di" => EffectiveAddress::BxDi(displacement),
+            "bp+si" => EffectiveAddress::BpSi(displacement),
+            "bp+di" => EffectiveAddress::BpDi(displacement),
+            "si" => EffectiveAddress::Si(displacement),
+            "di" => EffectiveAddress::Di(displacement),
+            "bp" => EffectiveAddress::Bp(displacement),
+            "bx" => EffectiveAddress::Bx(displacement),
+            _ => panic!(
+                "Invalid effective address formula: {}",
+                effective_address_formula
+            ),
+        }
+    }
+
+    fn to_memory_address(self) -> usize {
+        todo!()
     }
 }
 
@@ -65,72 +137,72 @@ impl Registers {
         *byte |= value as u16; // set low byte
     }
 
-    pub fn set_register(&mut self, register: Register, value: RegisterValue) {
+    pub fn set_register(&mut self, register: Register, value: MemoryValue) {
         match (register, value) {
-            (Register::Ax, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Bx, RegisterValue::Word(value)) => self.general[1] = value,
-            (Register::Cx, RegisterValue::Word(value)) => self.general[2] = value,
-            (Register::Dx, RegisterValue::Word(value)) => self.general[3] = value,
-            (Register::Ah, RegisterValue::Byte(value)) => {
+            (Register::Ax, MemoryValue::Word(value)) => self.general[0] = value,
+            (Register::Bx, MemoryValue::Word(value)) => self.general[1] = value,
+            (Register::Cx, MemoryValue::Word(value)) => self.general[2] = value,
+            (Register::Dx, MemoryValue::Word(value)) => self.general[3] = value,
+            (Register::Ah, MemoryValue::Byte(value)) => {
                 Registers::set_high_byte(&mut self.general[0], value)
             }
-            (Register::Bh, RegisterValue::Byte(value)) => {
+            (Register::Bh, MemoryValue::Byte(value)) => {
                 Registers::set_high_byte(&mut self.general[1], value)
             }
-            (Register::Ch, RegisterValue::Byte(value)) => {
+            (Register::Ch, MemoryValue::Byte(value)) => {
                 Registers::set_high_byte(&mut self.general[2], value)
             }
-            (Register::Dh, RegisterValue::Byte(value)) => {
+            (Register::Dh, MemoryValue::Byte(value)) => {
                 Registers::set_high_byte(&mut self.general[3], value)
             }
-            (Register::Al, RegisterValue::Byte(value)) => {
+            (Register::Al, MemoryValue::Byte(value)) => {
                 Registers::set_low_byte(&mut self.general[0], value)
             }
-            (Register::Bl, RegisterValue::Byte(value)) => {
+            (Register::Bl, MemoryValue::Byte(value)) => {
                 Registers::set_low_byte(&mut self.general[1], value)
             }
-            (Register::Cl, RegisterValue::Byte(value)) => {
+            (Register::Cl, MemoryValue::Byte(value)) => {
                 Registers::set_low_byte(&mut self.general[2], value)
             }
-            (Register::Dl, RegisterValue::Byte(value)) => {
+            (Register::Dl, MemoryValue::Byte(value)) => {
                 Registers::set_low_byte(&mut self.general[3], value)
             }
-            (Register::Sp, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Bp, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Si, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Di, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Cs, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Ds, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Ss, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Es, RegisterValue::Word(value)) => self.general[0] = value,
-            (Register::Ip, RegisterValue::Word(value)) => self.general[0] = value,
+            (Register::Sp, MemoryValue::Word(value)) => self.general[4] = value,
+            (Register::Bp, MemoryValue::Word(value)) => self.general[5] = value,
+            (Register::Si, MemoryValue::Word(value)) => self.general[6] = value,
+            (Register::Di, MemoryValue::Word(value)) => self.general[7] = value,
+            (Register::Cs, MemoryValue::Word(value)) => self.segment[0] = value,
+            (Register::Ds, MemoryValue::Word(value)) => self.segment[1] = value,
+            (Register::Ss, MemoryValue::Word(value)) => self.segment[2] = value,
+            (Register::Es, MemoryValue::Word(value)) => self.segment[3] = value,
+            (Register::Ip, MemoryValue::Word(value)) => self.instruction_pointer = value,
             (register, value) => panic!("Register {register:?} can't take a {value:?}"),
         }
     }
 
-    pub fn get_register(&self, register: Register) -> RegisterValue {
+    pub fn get_register(&self, register: Register) -> MemoryValue {
         match register {
-            Register::Ax => RegisterValue::Word(self.general[0]),
-            Register::Bx => RegisterValue::Word(self.general[1]),
-            Register::Cx => RegisterValue::Word(self.general[2]),
-            Register::Dx => RegisterValue::Word(self.general[3]),
-            Register::Ah => RegisterValue::Byte(self.general[0].to_be_bytes()[0]),
-            Register::Bh => RegisterValue::Byte(self.general[1].to_be_bytes()[0]),
-            Register::Ch => RegisterValue::Byte(self.general[2].to_be_bytes()[0]),
-            Register::Dh => RegisterValue::Byte(self.general[3].to_be_bytes()[0]),
-            Register::Al => RegisterValue::Byte(self.general[0].to_be_bytes()[1]),
-            Register::Bl => RegisterValue::Byte(self.general[1].to_be_bytes()[1]),
-            Register::Cl => RegisterValue::Byte(self.general[2].to_be_bytes()[1]),
-            Register::Dl => RegisterValue::Byte(self.general[3].to_be_bytes()[1]),
-            Register::Sp => RegisterValue::Word(self.general[4]),
-            Register::Bp => RegisterValue::Word(self.general[5]),
-            Register::Si => RegisterValue::Word(self.general[6]),
-            Register::Di => RegisterValue::Word(self.general[7]),
-            Register::Cs => RegisterValue::Word(self.segment[0]),
-            Register::Ds => RegisterValue::Word(self.segment[1]),
-            Register::Ss => RegisterValue::Word(self.segment[2]),
-            Register::Es => RegisterValue::Word(self.segment[3]),
-            Register::Ip => RegisterValue::Word(self.instruction_pointer),
+            Register::Ax => MemoryValue::Word(self.general[0]),
+            Register::Bx => MemoryValue::Word(self.general[1]),
+            Register::Cx => MemoryValue::Word(self.general[2]),
+            Register::Dx => MemoryValue::Word(self.general[3]),
+            Register::Ah => MemoryValue::Byte(self.general[0].to_be_bytes()[0]),
+            Register::Bh => MemoryValue::Byte(self.general[1].to_be_bytes()[0]),
+            Register::Ch => MemoryValue::Byte(self.general[2].to_be_bytes()[0]),
+            Register::Dh => MemoryValue::Byte(self.general[3].to_be_bytes()[0]),
+            Register::Al => MemoryValue::Byte(self.general[0].to_be_bytes()[1]),
+            Register::Bl => MemoryValue::Byte(self.general[1].to_be_bytes()[1]),
+            Register::Cl => MemoryValue::Byte(self.general[2].to_be_bytes()[1]),
+            Register::Dl => MemoryValue::Byte(self.general[3].to_be_bytes()[1]),
+            Register::Sp => MemoryValue::Word(self.general[4]),
+            Register::Bp => MemoryValue::Word(self.general[5]),
+            Register::Si => MemoryValue::Word(self.general[6]),
+            Register::Di => MemoryValue::Word(self.general[7]),
+            Register::Cs => MemoryValue::Word(self.segment[0]),
+            Register::Ds => MemoryValue::Word(self.segment[1]),
+            Register::Ss => MemoryValue::Word(self.segment[2]),
+            Register::Es => MemoryValue::Word(self.segment[3]),
+            Register::Ip => MemoryValue::Word(self.instruction_pointer),
         }
     }
 }
@@ -218,16 +290,25 @@ impl Register {
 }
 
 #[derive(Debug, PartialEq)]
-enum RegisterValue {
+enum MemoryValue {
     Byte(u8),
     Word(u16),
 }
 
-impl std::fmt::Display for RegisterValue {
+impl std::fmt::LowerHex for MemoryValue {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            RegisterValue::Byte(value) => write!(f, "{:#x}", value),
-            RegisterValue::Word(value) => write!(f, "{:#x}", value),
+            MemoryValue::Byte(value) => write!(f, "{:02x}", value),
+            MemoryValue::Word(value) => write!(f, "{:04x}", value),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            MemoryValue::Byte(value) => write!(f, "{:#x}", value),
+            MemoryValue::Word(value) => write!(f, "{:#x}", value),
         }
     }
 }
@@ -252,7 +333,7 @@ impl Cpu {
     }
 
     pub fn next_instruction(&mut self) -> Option<u8> {
-        if let RegisterValue::Word(ip) = self.registers.get_register(Register::Ip) {
+        if let MemoryValue::Word(ip) = self.registers.get_register(Register::Ip) {
             let next_instruction = self.memory.read_u8(self.registers.code_segment() * 64 + ip);
             self.registers.increment_instruction_pointer();
             if self.last_instruction < self.registers.instruction_pointer.try_into().unwrap() {
@@ -268,17 +349,19 @@ impl Cpu {
     pub fn execute(&mut self, instruction: &Instruction) {
         //print_comment(format!("Going to execute instruction: {instruction:?}"));
         print!("{}", instruction.str_rep);
-        let pre_op_registers = self.registers.clone();
+        let pre_op_registers = self.registers;
         match &instruction.op {
+            Operation::MoveMemoryToAccumulator => {}
+            Operation::MoveAccumulatorToMemory => {}
             Operation::MovImmediateToRegister => {
                 match (&instruction.operands.left, &instruction.operands.right) {
                     (Operand::Register(register), Operand::ImmediateWord(value)) => {
                         self.registers
-                            .set_register(*register, RegisterValue::Word(*value));
+                            .set_register(*register, MemoryValue::Word(*value));
                     }
                     (Operand::Register(register), Operand::ImmediateByte(value)) => {
                         self.registers
-                            .set_register(*register, RegisterValue::Byte(*value));
+                            .set_register(*register, MemoryValue::Byte(*value));
                     }
                     (left, right) => {
                         panic!(
@@ -288,8 +371,37 @@ impl Cpu {
                     }
                 }
             }
+            Operation::MovRegisterMemoryToFromRegister => {
+                match (&instruction.operands.left, &instruction.operands.right) {
+                    (Operand::Register(register), Operand::Address(effective_address)) => {
+                        self.registers.set_register(
+                            *register,
+                            self.memory
+                                .get_address(effective_address.to_memory_address()),
+                        );
+                    }
+                    (Operand::Address(effective_address), Operand::Register(register)) => {
+                        self.memory.set_address(
+                            *effective_address,
+                            self.registers.get_register(*register),
+                        );
+                    }
+                    (left, right) => {
+                        panic!(
+                            "{:?} not defined for operands: ({left:?}, {right:?})",
+                            instruction.op
+                        )
+                    }
+                }
+            }
+            Operation::MoveImmediateToRegisterOrMemory(_wide) => {}
+            Operation::Jump(_jump_type) => {}
+            Operation::Loop(_loop_type) => {}
+            Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(_arithmatic_type) => {}
+            Operation::ArithmaticImmediateToRegisterOrMemory(_arithmatic_type, _wide) => {}
+            Operation::ArithmaticImmediateWithAccumulator => {}
         }
-        let post_op_registers = self.registers.clone();
+        let post_op_registers = self.registers;
         register_changed(Register::Ax, pre_op_registers, post_op_registers);
         register_changed(Register::Bx, pre_op_registers, post_op_registers);
         register_changed(Register::Cx, pre_op_registers, post_op_registers);
@@ -303,6 +415,83 @@ impl Cpu {
         register_changed(Register::Ss, pre_op_registers, post_op_registers);
         register_changed(Register::Es, pre_op_registers, post_op_registers);
         register_changed(Register::Ip, pre_op_registers, post_op_registers);
+    }
+
+    /// Prints the current value in each register to the console
+    ///
+    /// Example output:
+    /// ````
+    ///      ax: 0x0001 (1)
+    ///      bx: 0x0002 (2)
+    ///      cx: 0x0003 (3)
+    ///      dx: 0x0004 (4)
+    ///      sp: 0x0005 (5)
+    ///      bp: 0x0006 (6)
+    ///      si: 0x0007 (7)
+    ///      di: 0x0008 (8)
+    /// ````
+    ///
+    fn print_registers(&self) {
+        println!(
+            "\tax: 0x{:04x} ({})",
+            self.registers.get_register(Register::Ax),
+            self.registers.get_register(Register::Ax)
+        );
+        println!(
+            "\tbx: 0x{:04x} ({})",
+            self.registers.get_register(Register::Bx),
+            self.registers.get_register(Register::Bx)
+        );
+        println!(
+            "\tcx: 0x{:04x} ({})",
+            self.registers.get_register(Register::Cx),
+            self.registers.get_register(Register::Cx)
+        );
+        println!(
+            "\tdx: 0x{:04x} ({})",
+            self.registers.get_register(Register::Dx),
+            self.registers.get_register(Register::Dx)
+        );
+        println!(
+            "\tsp: 0x{:04x} ({})",
+            self.registers.get_register(Register::Sp),
+            self.registers.get_register(Register::Sp)
+        );
+        println!(
+            "\tsi: 0x{:04x} ({})",
+            self.registers.get_register(Register::Si),
+            self.registers.get_register(Register::Si)
+        );
+        println!(
+            "\tdi: 0x{:04x} ({})",
+            self.registers.get_register(Register::Di),
+            self.registers.get_register(Register::Di)
+        );
+        println!(
+            "\tcs: 0x{:04x} ({})",
+            self.registers.get_register(Register::Cs),
+            self.registers.get_register(Register::Cs)
+        );
+        println!(
+            "\tds: 0x{:04x} ({})",
+            self.registers.get_register(Register::Ds),
+            self.registers.get_register(Register::Ds)
+        );
+        println!(
+            "\tss: 0x{:04x} ({})",
+            self.registers.get_register(Register::Ss),
+            self.registers.get_register(Register::Ss)
+        );
+        println!(
+            "\tes: 0x{:04x} ({})",
+            self.registers.get_register(Register::Es),
+            self.registers.get_register(Register::Es)
+        );
+        println!(
+            "\tip: 0x{:04x} ({})",
+            self.registers.get_register(Register::Ip),
+            self.registers.get_register(Register::Ip)
+        );
     }
 }
 
@@ -406,6 +595,55 @@ struct Operands {
 #[derive(Debug)]
 enum Operation {
     MovImmediateToRegister,
+    MovRegisterMemoryToFromRegister,
+    MoveImmediateToRegisterOrMemory(bool),
+    MoveMemoryToAccumulator,
+    MoveAccumulatorToMemory,
+    ArithmaticImmediateWithAccumulator,
+    Loop(LoopType),
+    Jump(JumpType),
+    ArithmaticRegisterOrMemoryAndRegisterToEither(ArithmaticType),
+    ArithmaticImmediateToRegisterOrMemory(ArithmaticType, bool),
+}
+
+#[derive(Debug, Copy, Clone)]
+enum ArithmaticType {
+    Add,
+    Or,
+    Adc,
+    Sbb,
+    And,
+    Sub,
+    Xor,
+    Cmp,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum JumpType {
+    Je,
+    Jl,
+    Jle,
+    Jb,
+    Jbe,
+    Jp,
+    Jo,
+    Js,
+    Jne,
+    Jnl,
+    Jnle,
+    Jnb,
+    Jnbe,
+    Jnp,
+    Jno,
+    Jns,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum LoopType {
+    Loop,
+    Loopz,
+    Loopnz,
+    Jcxz,
 }
 
 #[derive(Debug)]
@@ -413,6 +651,9 @@ enum Operand {
     Register(Register),
     ImmediateByte(u8),
     ImmediateWord(u16),
+    Address(Address),
+    SignedInstructionPointerIncrement(i8),
+    None,
 }
 
 const OPCODES: [(u8, u8, &str); 12] = [
@@ -476,9 +717,7 @@ fn get_register_encoding(reg: u8, word: bool) -> &'static str {
     }
 }
 
-const EFFECTIVE_ADDRESS: [&str; 8] = [
-    "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx",
-];
+const EFFECTIVE_ADDRESS: [&str; 8] = ["bx+si", "bx+di", "bp+si", "bp+di", "si", "di", "bp", "bx"];
 
 fn get_effective_address(rm: usize) -> &'static str {
     EFFECTIVE_ADDRESS[rm]
@@ -511,13 +750,9 @@ fn main() -> io::Result<()> {
     while let Some(byte) = cpu.next_instruction() {
         let instruction = get_instruction(byte).unwrap();
 
-        let assembly = match instruction {
+        let instruction = match instruction {
             "mov-reg_mem-to_from-reg" => mov_reg_mem_to_from_reg(byte, &mut cpu),
-            "mov-immediate-to-reg" => {
-                let instruction = mov_immediate_to_reg(byte, &mut cpu);
-                cpu.execute(&instruction);
-                "".to_string()
-            }
+            "mov-immediate-to-reg" => mov_immediate_to_reg(byte, &mut cpu),
             "mov-immediate-to-reg_mem" => mov_immediate_to_reg_mem(byte, &mut cpu),
             "mov-memory-to-accumulator" => mov_memory_to_accumulator(byte, &mut cpu),
             "mov-accumulator-to-memory" => mov_accumulator_to_memory(byte, &mut cpu),
@@ -533,67 +768,103 @@ fn main() -> io::Result<()> {
             &_ => todo!("Not yet implemented {instruction}"),
         };
 
-        println!("{assembly}");
+        cpu.execute(&instruction);
     }
+    println!("\nFinal registers:");
+    cpu.print_registers();
 
     Ok(())
 }
 
-const LOOP_OPS: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
-
-const JUMP_OPS: [&str; 16] = [
-    "jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl",
-    "jle", "jnle",
+const LOOP_OPS: [LoopType; 4] = [
+    LoopType::Loop,
+    LoopType::Loopz,
+    LoopType::Loopnz,
+    LoopType::Jcxz,
 ];
 
-fn r#loop(byte: u8, cpu: &mut Cpu) -> String {
-    let mut data: Vec<u8> = Vec::new();
+const JUMP_OPS: [JumpType; 16] = [
+    JumpType::Je,
+    JumpType::Jl,
+    JumpType::Jle,
+    JumpType::Jb,
+    JumpType::Jbe,
+    JumpType::Jp,
+    JumpType::Jo,
+    JumpType::Js,
+    JumpType::Jne,
+    JumpType::Jnl,
+    JumpType::Jnle,
+    JumpType::Jnb,
+    JumpType::Jnbe,
+    JumpType::Jnp,
+    JumpType::Jno,
+    JumpType::Jns,
+];
 
-    data.push(cpu.next_instruction().unwrap());
+fn r#loop(byte: u8, cpu: &mut Cpu) -> Instruction {
+    let data: Vec<u8> = vec![cpu.next_instruction().unwrap()];
 
     let loop_op = LOOP_OPS[<u8 as TryInto<usize>>::try_into(byte & 3).unwrap()];
 
     let ip_inc8 = i8::from_ne_bytes(data[0..1].try_into().unwrap()) + 2;
 
-    let inc_ip = if ip_inc8 > 0 {
-        format!("$+{}+0", ip_inc8)
-    } else if ip_inc8 == 0 {
-        format!("$+0")
-    } else {
-        format!("${}+0", ip_inc8)
+    let inc_ip = match ip_inc8.cmp(&0) {
+        Ordering::Less => format!("${}+0", ip_inc8),
+        Ordering::Equal => "$+0".to_string(),
+        Ordering::Greater => format!("$+{}+0", ip_inc8),
     };
 
-    format!("{loop_op} {inc_ip}")
+    Instruction {
+        op: Operation::Loop(loop_op),
+        operands: Operands {
+            left: Operand::SignedInstructionPointerIncrement(ip_inc8),
+            right: Operand::None,
+        },
+        str_rep: format!("{loop_op:?} {inc_ip}"),
+    }
 }
 
-fn jump(byte: u8, cpu: &mut Cpu) -> String {
-    let mut data: Vec<u8> = Vec::new();
-
-    data.push(cpu.next_instruction().unwrap());
+fn jump(byte: u8, cpu: &mut Cpu) -> Instruction {
+    let data: Vec<u8> = vec![cpu.next_instruction().unwrap()];
 
     let jump_op = JUMP_OPS[<u8 as TryInto<usize>>::try_into(byte & 15).unwrap()];
 
     let ip_inc8 = i8::from_ne_bytes(data[0..1].try_into().unwrap()) + 2;
 
-    let inc_ip = if ip_inc8 > 0 {
-        format!("$+{}+0", ip_inc8)
-    } else if ip_inc8 == 0 {
-        format!("$+0")
-    } else {
-        format!("${}+0", ip_inc8)
+    let inc_ip = match ip_inc8.cmp(&0) {
+        Ordering::Less => format!("${}+0", ip_inc8),
+        Ordering::Equal => "$+0".to_string(),
+        Ordering::Greater => format!("$+{}+0", ip_inc8),
     };
 
-    format!("{jump_op} {inc_ip}")
+    Instruction {
+        op: Operation::Jump(jump_op),
+        operands: Operands {
+            left: Operand::SignedInstructionPointerIncrement(ip_inc8),
+            right: Operand::None,
+        },
+        str_rep: format!("{jump_op:?} {inc_ip}"),
+    }
 }
 
-const ARITHMATIC_OPS: [&str; 8] = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
+const ARITHMATIC_OPS: [ArithmaticType; 8] = [
+    ArithmaticType::Add,
+    ArithmaticType::Or,
+    ArithmaticType::Adc,
+    ArithmaticType::Sbb,
+    ArithmaticType::And,
+    ArithmaticType::Sub,
+    ArithmaticType::Xor,
+    ArithmaticType::Cmp,
+];
 
-fn get_arithmatic_op(byte: u8) -> &'static str {
+fn get_arithmatic_op(byte: u8) -> ArithmaticType {
     let index: usize = byte.try_into().unwrap();
     ARITHMATIC_OPS[index]
 }
 
-fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> String {
+fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let reg_is_destination = byte & 0x2 == 0x2;
     let wide = byte & 0x1 == 0x1;
@@ -605,13 +876,27 @@ fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> String {
     let reg = get_register_encoding((data[0] & 0b0011_1000).rotate_right(3), wide);
     let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
     if reg_is_destination {
-        format!("{op} {reg}, {effective_address_formula}")
+        Instruction {
+            op: Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(op),
+            operands: Operands {
+                left: Operand::Register(Register::from_str(reg)),
+                right: Operand::Address(effective_address_formula),
+            },
+            str_rep: format!("{op:?} {reg}, {effective_address_formula:?}"),
+        }
     } else {
-        format!("{op} {effective_address_formula}, {reg}")
+        Instruction {
+            op: Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(op),
+            operands: Operands {
+                left: Operand::Address(effective_address_formula),
+                right: Operand::Register(Register::from_str(reg)),
+            },
+            str_rep: format!("{op:?} {effective_address_formula:?}, {reg}"),
+        }
     }
 }
 
-fn mov_reg_mem_to_from_reg(byte: u8, cpu: &mut Cpu) -> String {
+fn mov_reg_mem_to_from_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let reg_is_destination = byte & 0x2 == 0x2;
     let wide = byte & 0x1 == 0x1;
@@ -623,21 +908,35 @@ fn mov_reg_mem_to_from_reg(byte: u8, cpu: &mut Cpu) -> String {
     let reg = get_register_encoding((data[0] & 0b0011_1000).rotate_right(3), wide);
     let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
     if reg_is_destination {
-        format!("mov {reg}, {effective_address_formula}")
+        Instruction {
+            op: Operation::MovRegisterMemoryToFromRegister,
+            operands: Operands {
+                left: Operand::Register(Register::from_str(reg)),
+                right: Operand::Address(effective_address_formula),
+            },
+            str_rep: format!("mov {reg}, {effective_address_formula:?}"),
+        }
     } else {
-        format!("mov {effective_address_formula}, {reg}")
+        Instruction {
+            op: Operation::MovRegisterMemoryToFromRegister,
+            operands: Operands {
+                left: Operand::Address(effective_address_formula),
+                right: Operand::Register(Register::from_str(reg)),
+            },
+            str_rep: format!("mov {effective_address_formula:?}, {reg}"),
+        }
     }
 }
 
-fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> String {
+fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
     let signed_extension = byte & 2 == 2;
 
     data.push(cpu.next_instruction().unwrap());
 
-    let op = if byte >> 3 & 7 == 6 {
-        "xor"
+    let op = if (byte >> 3 & 7) == 6 {
+        ArithmaticType::Xor
     } else {
         get_arithmatic_op(data[0] >> 3 & 7)
     };
@@ -648,7 +947,7 @@ fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> String {
         "signed_extension: {signed_extension}, wide: {wide}"
     ));
     data.push(cpu.next_instruction().unwrap());
-    let immediate: String = if wide {
+    let immediate = if wide {
         if signed_extension {
             data.push(0);
         } else {
@@ -656,32 +955,25 @@ fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> String {
         }
 
         let len = data.len();
-        format!(
-            "{}",
-            i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
-        )
+        i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
     } else {
         let len = data.len();
-        format!(
-            "{}",
-            i8::from_ne_bytes(data[len - 1..len].try_into().unwrap())
-        )
+        i8::from_ne_bytes(data[len - 1..len].try_into().unwrap()).into()
     };
 
-    let width_specifier = if effective_address_formula.contains("[") {
-        if wide {
-            "word "
-        } else {
-            "byte "
-        }
-    } else {
-        ""
-    };
+    let width_specifier = if wide { "word " } else { "byte " };
 
-    format!("{op} {width_specifier}{effective_address_formula}, {immediate}")
+    Instruction {
+        str_rep: format!("{op:?} {width_specifier}{effective_address_formula:?}, {immediate}"),
+        op: Operation::ArithmaticImmediateToRegisterOrMemory(op, wide),
+        operands: Operands {
+            left: Operand::Address(effective_address_formula),
+            right: Operand::ImmediateWord(immediate as u16),
+        },
+    }
 }
 
-fn mov_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> String {
+fn mov_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
     //println!("; MOV immediate to register: {reg}, wide: {w}");
@@ -690,26 +982,27 @@ fn mov_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> String {
     let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
 
     data.push(cpu.next_instruction().unwrap());
-    let immediate: String = if wide {
+    let immediate = if wide {
         data.push(cpu.next_instruction().unwrap());
 
         let len = data.len();
-        format!(
-            "word {}",
-            i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
-        )
+        i16::from_ne_bytes(data[len - 2..len].try_into().unwrap())
     } else {
         let len = data.len();
-        format!(
-            "byte {}",
-            i8::from_ne_bytes(data[len - 1..len].try_into().unwrap())
-        )
+        i8::from_ne_bytes(data[len - 1..len].try_into().unwrap()).into()
     };
 
-    format!("mov {effective_address_formula}, {immediate}")
+    Instruction {
+        str_rep: format!("mov {effective_address_formula:?}, {immediate}"),
+        op: Operation::MoveImmediateToRegisterOrMemory(wide),
+        operands: Operands {
+            left: Operand::Address(effective_address_formula),
+            right: Operand::ImmediateWord(immediate as u16),
+        },
+    }
 }
 
-fn mov_accumulator_to_memory(byte: u8, cpu: &mut Cpu) -> String {
+fn mov_accumulator_to_memory(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
 
@@ -725,10 +1018,21 @@ fn mov_accumulator_to_memory(byte: u8, cpu: &mut Cpu) -> String {
             .unwrap()
     };
 
-    format!("mov [{address}], ax")
+    format!("mov [{address}], ax");
+
+    Instruction {
+        str_rep: format!("mov [{address}], ax"),
+        op: Operation::MoveAccumulatorToMemory,
+        operands: Operands {
+            left: Operand::Address(Address::MemoryAddress(MemoryAddress {
+                address: address as usize,
+            })),
+            right: Operand::Register(Register::Ax),
+        },
+    }
 }
 
-fn arithmatic_immediate_with_accumulator(byte: u8, cpu: &mut Cpu) -> String {
+fn arithmatic_immediate_with_accumulator(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
 
@@ -748,10 +1052,18 @@ fn arithmatic_immediate_with_accumulator(byte: u8, cpu: &mut Cpu) -> String {
 
     let reg = if wide { "ax" } else { "al" };
 
-    format!("{op} {reg}, {immediate}")
+    // format!("{op} {reg}, {immediate}");
+    Instruction {
+        str_rep: format!("{op:?} {reg}, {immediate}"),
+        op: Operation::ArithmaticImmediateWithAccumulator,
+        operands: Operands {
+            left: Operand::Register(if wide { Register::Ax } else { Register::Al }),
+            right: Operand::ImmediateWord(immediate as u16),
+        },
+    }
 }
 
-fn mov_memory_to_accumulator(byte: u8, cpu: &mut Cpu) -> String {
+fn mov_memory_to_accumulator(byte: u8, cpu: &mut Cpu) -> Instruction {
     let mut data: Vec<u8> = Vec::new();
     let wide = byte & 1 == 1;
 
@@ -767,7 +1079,17 @@ fn mov_memory_to_accumulator(byte: u8, cpu: &mut Cpu) -> String {
             .unwrap()
     };
 
-    format!("mov ax, [{address}]")
+    //format!("mov ax, [{address}]")
+    Instruction {
+        str_rep: format!("mov ax, [{address}]"),
+        op: Operation::MoveMemoryToAccumulator,
+        operands: Operands {
+            left: Operand::Address(Address::MemoryAddress(MemoryAddress {
+                address: address as usize,
+            })),
+            right: Operand::Register(Register::Ax),
+        },
+    }
 }
 
 fn mov_immediate_to_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
@@ -804,11 +1126,11 @@ fn mov_immediate_to_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
     }
 }
 
-fn get_effective_address_formula(data: &mut Vec<u8>, wide: bool, cpu: &mut Cpu) -> String {
+fn get_effective_address_formula(data: &mut Vec<u8>, wide: bool, cpu: &mut Cpu) -> Address {
     let mod_field = (data[0] & 0b1100_0000).rotate_left(2);
     let rm = data[0] & 0b0000_0111;
     match mod_field {
-        0b11 => get_register_encoding(rm, wide).to_string(),
+        0b11 => Address::Register(Register::from_str(get_register_encoding(rm, wide))),
         _ => {
             let mut address: i16 = 0;
             let effective_address_formula =
@@ -832,12 +1154,16 @@ fn get_effective_address_formula(data: &mut Vec<u8>, wide: bool, cpu: &mut Cpu) 
                 }
             }
             if mod_field == 0 && rm == 6 {
-                format!("[{address}]")
+                Address::MemoryAddress(MemoryAddress {
+                    address: address.try_into().unwrap(),
+                })
             } else if address != 0 {
-                let sign = if address > 0 { "+" } else { "-" };
-                format!("[{effective_address_formula} {sign} {}]", address.abs())
+                Address::EffectiveFormula(EffectiveAddress::from_str(
+                    effective_address_formula,
+                    address.try_into().unwrap(),
+                ))
             } else {
-                format!("[{effective_address_formula}]")
+                Address::EffectiveFormula(EffectiveAddress::from_str(effective_address_formula, 0))
             }
         }
     }
