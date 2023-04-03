@@ -72,6 +72,17 @@ struct MemoryAddress {
     address: usize,
 }
 
+impl std::convert::From<MemoryValue> for MemoryAddress {
+    fn from(value: MemoryValue) -> Self {
+        Self {
+            address: match value {
+                MemoryValue::Byte(value) => value as usize,
+                MemoryValue::Word(value) => value as usize,
+            },
+        }
+    }
+}
+
 impl std::fmt::Display for MemoryAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[{}]", self.address)
@@ -134,11 +145,41 @@ struct Cpu {
     last_instruction: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Flag {
+    Af,
+    Cf,
+    Of,
+    Sf,
+    Pf,
+    Zf,
+    Df,
+    If,
+    Tf,
+}
+
+impl std::fmt::Display for Flag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Af => write!(f, "A"),
+            Self::Cf => write!(f, "C"),
+            Self::Of => write!(f, "O"),
+            Self::Sf => write!(f, "S"),
+            Self::Pf => write!(f, "P"),
+            Self::Zf => write!(f, "Z"),
+            Self::Df => write!(f, "D"),
+            Self::If => write!(f, "I"),
+            Self::Tf => write!(f, "T"),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 struct Registers {
     general: [u16; 8], // 8 word sized registers
     segment: [u16; 4], // 4 word sized registers
     instruction_pointer: u16,
+    flags: u16,
 }
 
 impl Registers {
@@ -151,6 +192,7 @@ impl Registers {
             general: general_registers,
             segment: segment_registers,
             instruction_pointer: 0,
+            flags: 0,
         }
     }
 
@@ -170,6 +212,88 @@ impl Registers {
     fn set_low_byte(byte: &mut u16, value: u8) {
         *byte &= 0xFF00; // clear low byte
         *byte |= value as u16; // set low byte
+    }
+
+    pub fn get_flag(&self, flag: Flag) -> bool {
+        match flag {
+            Flag::Af => (self.flags & 0x0010) != 0,
+            Flag::Cf => (self.flags & 0x0001) != 0,
+            Flag::Of => (self.flags & 0x0800) != 0,
+            Flag::Sf => (self.flags & 0x0080) != 0,
+            Flag::Pf => (self.flags & 0x0004) != 0,
+            Flag::Zf => (self.flags & 0x0040) != 0,
+            Flag::Df => (self.flags & 0x0400) != 0,
+            Flag::If => (self.flags & 0x0200) != 0,
+            Flag::Tf => (self.flags & 0x0100) != 0,
+        }
+    }
+
+    fn set_flag(&mut self, flag: Flag, value: bool) {
+        match flag {
+            Flag::Af => {
+                if value {
+                    self.flags |= 0x0010
+                } else {
+                    self.flags &= 0xFFEF
+                }
+            }
+            Flag::Cf => {
+                if value {
+                    self.flags |= 0x0001
+                } else {
+                    self.flags &= 0xFFFE
+                }
+            }
+            Flag::Of => {
+                if value {
+                    self.flags |= 0x0800
+                } else {
+                    self.flags &= 0xF7FF
+                }
+            }
+            Flag::Sf => {
+                if value {
+                    self.flags |= 0x0080
+                } else {
+                    self.flags &= 0xFF7F
+                }
+            }
+            Flag::Pf => {
+                if value {
+                    self.flags |= 0x0004
+                } else {
+                    self.flags &= 0xFFFB
+                }
+            }
+            Flag::Zf => {
+                if value {
+                    self.flags |= 0x0040
+                } else {
+                    self.flags &= 0xFFBF
+                }
+            }
+            Flag::Df => {
+                if value {
+                    self.flags |= 0x0400
+                } else {
+                    self.flags &= 0xFBFF
+                }
+            }
+            Flag::If => {
+                if value {
+                    self.flags |= 0x0200
+                } else {
+                    self.flags &= 0xFDFF
+                }
+            }
+            Flag::Tf => {
+                if value {
+                    self.flags |= 0x0100
+                } else {
+                    self.flags &= 0xFEFF
+                }
+            }
+        }
     }
 
     pub fn set_register(&mut self, register: Register, value: MemoryValue) {
@@ -324,10 +448,77 @@ impl Register {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 enum MemoryValue {
     Byte(u8),
     Word(u16),
+}
+
+impl MemoryValue {
+    pub fn count_ones(&self) -> u32 {
+        match self {
+            MemoryValue::Byte(byte) => byte.count_ones(),
+            MemoryValue::Word(word) => word.count_ones(),
+        }
+    }
+}
+
+impl std::convert::From<i32> for MemoryValue {
+    fn from(value: i32) -> Self {
+        MemoryValue::Word(value as u16)
+    }
+}
+
+impl std::ops::Add for MemoryValue {
+    type Output = MemoryValue;
+
+    fn add(self, other: MemoryValue) -> MemoryValue {
+        match (self, other) {
+            (MemoryValue::Byte(a), MemoryValue::Byte(b)) => MemoryValue::Byte(a + b),
+            (MemoryValue::Word(a), MemoryValue::Word(b)) => MemoryValue::Word(a + b),
+            (MemoryValue::Byte(a), MemoryValue::Word(b)) => MemoryValue::Word(a as u16 + b),
+            (MemoryValue::Word(a), MemoryValue::Byte(b)) => MemoryValue::Word(a + b as u16),
+        }
+    }
+}
+
+impl std::ops::Sub for MemoryValue {
+    type Output = MemoryValue;
+
+    fn sub(self, other: MemoryValue) -> MemoryValue {
+        match (self, other) {
+            (MemoryValue::Byte(a), MemoryValue::Byte(b)) => MemoryValue::Byte(a - b),
+            (MemoryValue::Word(a), MemoryValue::Word(b)) => MemoryValue::Word(a - b),
+            (MemoryValue::Byte(a), MemoryValue::Word(b)) => MemoryValue::Word(a as u16 - b),
+            (MemoryValue::Word(a), MemoryValue::Byte(b)) => MemoryValue::Word(a - b as u16),
+        }
+    }
+}
+
+impl std::ops::BitAnd for MemoryValue {
+    type Output = MemoryValue;
+
+    fn bitand(self, other: MemoryValue) -> MemoryValue {
+        match (self, other) {
+            (MemoryValue::Byte(a), MemoryValue::Byte(b)) => MemoryValue::Byte(a & b),
+            (MemoryValue::Word(a), MemoryValue::Word(b)) => MemoryValue::Word(a & b),
+            (MemoryValue::Byte(a), MemoryValue::Word(b)) => MemoryValue::Word(a as u16 & b),
+            (MemoryValue::Word(a), MemoryValue::Byte(b)) => MemoryValue::Word(a & b as u16),
+        }
+    }
+}
+
+impl std::ops::BitOr for MemoryValue {
+    type Output = MemoryValue;
+
+    fn bitor(self, other: MemoryValue) -> MemoryValue {
+        match (self, other) {
+            (MemoryValue::Byte(a), MemoryValue::Byte(b)) => MemoryValue::Byte(a | b),
+            (MemoryValue::Word(a), MemoryValue::Word(b)) => MemoryValue::Word(a | b),
+            (MemoryValue::Byte(a), MemoryValue::Word(b)) => MemoryValue::Word(a as u16 | b),
+            (MemoryValue::Word(a), MemoryValue::Byte(b)) => MemoryValue::Word(a | b as u16),
+        }
+    }
 }
 
 impl std::fmt::LowerHex for MemoryValue {
@@ -386,8 +577,12 @@ impl Cpu {
         print!("{}", instruction.str_rep);
         let pre_op_registers = self.registers;
         match &instruction.op {
-            Operation::MoveMemoryToAccumulator => {}
-            Operation::MoveAccumulatorToMemory => {}
+            Operation::MoveMemoryToAccumulator => {
+                todo!()
+            }
+            Operation::MoveAccumulatorToMemory => {
+                todo!()
+            }
             Operation::MovImmediateToRegister => {
                 match (&instruction.operands.left, &instruction.operands.right) {
                     (Operand::Register(register), Operand::ImmediateWord(value)) => {
@@ -447,17 +642,241 @@ impl Cpu {
                     }
                 }
             }
-            Operation::MoveImmediateToRegisterOrMemory(_wide) => {}
-            Operation::Jump(_jump_type) => {}
-            Operation::Loop(_loop_type) => {}
-            Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(_arithmatic_type) => {}
-            Operation::ArithmaticImmediateToRegisterOrMemory(_arithmatic_type, _wide) => {}
-            Operation::ArithmaticImmediateWithAccumulator => {}
+            Operation::MoveImmediateToRegisterOrMemory(_wide) => {
+                todo!()
+            }
+            Operation::Jump(_jump_type) => {
+                todo!()
+            }
+            Operation::Loop(_loop_type) => {
+                todo!()
+            }
+            Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(arithmatic_type) => {
+                let (dest, source) = match (&instruction.operands.left, &instruction.operands.right)
+                {
+                    (Operand::Register(register), Operand::Address(address)) => {
+                        (Address::Register(*register), *address)
+                    }
+                    (Operand::Address(address), Operand::Register(register)) => {
+                        (*address, Address::Register(*register))
+                    }
+                    _ => panic!(
+                        "Invalid operands for arithmatic operation {:?}",
+                        instruction.operands
+                    ),
+                };
+
+                match arithmatic_type {
+                    ArithmaticType::Add => {
+                        self.set_address(dest, self.get_address(dest) + self.get_address(source))
+                    }
+                    ArithmaticType::Adc => {
+                        todo!()
+                    }
+                    ArithmaticType::Or => {
+                        todo!()
+                    }
+                    ArithmaticType::Sbb => {
+                        todo!()
+                    }
+                    ArithmaticType::And => {
+                        todo!()
+                    }
+                    ArithmaticType::Sub => {
+                        let result = self.get_address(dest) - self.get_address(source);
+                        self.set_address(dest, result);
+
+                        // Set Flag::Sf if the most significant bit is set in result
+                        self.registers
+                            .set_flag(Flag::Sf, result & 0x8000.into() != 0.into());
+                    }
+                    ArithmaticType::Xor => {
+                        todo!()
+                    }
+                    ArithmaticType::Cmp => {
+                        match self
+                            .get_address(dest)
+                            .partial_cmp(&self.get_address(source))
+                        {
+                            Some(Ordering::Less) => {
+                                self.registers.set_flag(Flag::Sf, true);
+                                self.registers.set_flag(Flag::Zf, false);
+                                self.registers.set_flag(Flag::Cf, true);
+                            }
+                            Some(Ordering::Equal) => {
+                                self.registers.set_flag(Flag::Sf, false);
+                                self.registers.set_flag(Flag::Zf, true);
+                                self.registers.set_flag(Flag::Cf, false);
+                            }
+                            Some(Ordering::Greater) => {
+                                self.registers.set_flag(Flag::Sf, false);
+                                self.registers.set_flag(Flag::Zf, false);
+                                self.registers.set_flag(Flag::Cf, false);
+                            }
+                            None => todo!(),
+                        }
+                    }
+                }
+            }
+            Operation::ArithmaticImmediateToRegisterOrMemory(arithmatic_type, _wide) => {
+                let (dest, immediate) =
+                    match (&instruction.operands.left, &instruction.operands.right) {
+                        (
+                            Operand::Address(Address::Register(register)),
+                            Operand::ImmediateWord(immediate),
+                        ) => (Address::Register(*register), MemoryValue::Word(*immediate)),
+                        _ => panic!(
+                            "Invalid operands for arithmatic operation {:?}",
+                            instruction.operands
+                        ),
+                    };
+
+                let (result, update_dest) = match arithmatic_type {
+                    ArithmaticType::Add => (self.get_address(dest) + immediate, true),
+                    ArithmaticType::Adc => {
+                        todo!()
+                    }
+                    ArithmaticType::Or => {
+                        todo!()
+                    }
+                    ArithmaticType::Sbb => {
+                        todo!()
+                    }
+                    ArithmaticType::And => {
+                        todo!()
+                    }
+                    ArithmaticType::Sub => (self.get_address(dest) - immediate, true),
+                    ArithmaticType::Xor => {
+                        todo!()
+                    }
+                    ArithmaticType::Cmp => (0.into(), false),
+                };
+
+                if update_dest {
+                    self.set_address(dest, result);
+                }
+
+                match arithmatic_type {
+                    ArithmaticType::Sub | ArithmaticType::Cmp => {
+                        match self.get_address(dest).partial_cmp(&immediate) {
+                            Some(Ordering::Less) => {
+                                self.registers.set_flag(Flag::Sf, true);
+                                self.registers.set_flag(Flag::Zf, false);
+                                self.registers.set_flag(Flag::Cf, true);
+                            }
+                            Some(Ordering::Equal) => {
+                                self.registers.set_flag(Flag::Sf, false);
+                                self.registers.set_flag(Flag::Zf, true);
+                                self.registers.set_flag(Flag::Cf, false);
+                            }
+                            Some(Ordering::Greater) => {
+                                self.registers.set_flag(Flag::Sf, false);
+                                self.registers.set_flag(Flag::Zf, false);
+                                self.registers.set_flag(Flag::Cf, false);
+                            }
+                            None => todo!(),
+                        }
+                    }
+                    _ => {}
+                }
+
+                match arithmatic_type {
+                    ArithmaticType::Sub | ArithmaticType::Cmp | ArithmaticType::Add => {
+                        // Set Flag::Pf if the result has even parity.
+                        self.registers
+                            .set_flag(Flag::Pf, result.count_ones() % 2 == 0);
+                    }
+                    _ => {}
+                }
+            }
+            Operation::ArithmaticImmediateWithAccumulator => {
+                todo!()
+            }
         }
+        print!("\t; ");
         let post_op_registers = self.registers;
         for register in Self::DEBUG_REGISTERS {
             register_changed(register, pre_op_registers, post_op_registers);
         }
+        let pre_flags: String = Self::DEBUG_FLAGS
+            .iter()
+            .filter(|f| pre_op_registers.get_flag(**f))
+            .map(|f| format!("{}", f))
+            .collect();
+        let post_flags: String = Self::DEBUG_FLAGS
+            .iter()
+            .filter(|f| post_op_registers.get_flag(**f))
+            .map(|f| format!("{}", f))
+            .collect();
+        if pre_flags != post_flags {
+            print!(" flags:{}->{}", pre_flags, post_flags);
+        }
+        println!();
+    }
+
+    const DEBUG_FLAGS: [Flag; 9] = [
+        Flag::Sf,
+        Flag::Zf,
+        Flag::Af,
+        Flag::Pf,
+        Flag::Cf,
+        Flag::Of,
+        Flag::Df,
+        Flag::If,
+        Flag::Tf,
+    ];
+
+    fn set_address(&mut self, address: Address, value: MemoryValue) {
+        match address {
+            Address::Register(register) => self.registers.set_register(register, value),
+            Address::MemoryAddress(_) => self.memory.set_address(address, value),
+            Address::EffectiveFormula(effective_formula) => self
+                .memory
+                .set_address(self.calculate_address(effective_formula), value),
+        }
+    }
+
+    fn get_address(&self, address: Address) -> MemoryValue {
+        match address {
+            Address::Register(register) => self.registers.get_register(register),
+            Address::MemoryAddress(address) => self.memory.get_address(address),
+            Address::EffectiveFormula(effective_formula) => {
+                self.get_address(self.calculate_address(effective_formula))
+            }
+        }
+    }
+
+    fn calculate_address(&self, effective_address_formula: EffectiveAddress) -> Address {
+        Address::MemoryAddress(match effective_address_formula {
+            EffectiveAddress::BxSi(displacement) => (self.registers.get_register(Register::Bx)
+                + self.registers.get_register(Register::Si)
+                + MemoryValue::Word(displacement))
+            .into(),
+            EffectiveAddress::BxDi(displacement) => (self.registers.get_register(Register::Bx)
+                + self.registers.get_register(Register::Di)
+                + MemoryValue::Word(displacement))
+            .into(),
+            EffectiveAddress::BpSi(displacement) => (self.registers.get_register(Register::Bp)
+                + self.registers.get_register(Register::Si)
+                + MemoryValue::Word(displacement))
+            .into(),
+            EffectiveAddress::BpDi(displacement) => (self.registers.get_register(Register::Bp)
+                + self.registers.get_register(Register::Di)
+                + MemoryValue::Word(displacement))
+            .into(),
+            EffectiveAddress::Si(displacement) => {
+                (self.registers.get_register(Register::Si) + MemoryValue::Word(displacement)).into()
+            }
+            EffectiveAddress::Di(displacement) => {
+                (self.registers.get_register(Register::Di) + MemoryValue::Word(displacement)).into()
+            }
+            EffectiveAddress::Bp(displacement) => {
+                (self.registers.get_register(Register::Bp) + MemoryValue::Word(displacement)).into()
+            }
+            EffectiveAddress::Bx(displacement) => {
+                (self.registers.get_register(Register::Bx) + MemoryValue::Word(displacement)).into()
+            }
+        })
     }
 
     const DEBUG_REGISTERS: [Register; 13] = [
@@ -481,6 +900,12 @@ impl Cpu {
             let value = self.registers.get_register(register);
             println!("\t{register}: 0x{value:04x} ({value})",);
         }
+        let flags: String = Self::DEBUG_FLAGS
+            .iter()
+            .filter(|f| self.registers.get_flag(**f))
+            .map(|f| format!("{}", f))
+            .collect();
+        println!("\tflags: {flags}");
     }
 }
 
@@ -488,7 +913,7 @@ fn register_changed(register: Register, pre: Registers, post: Registers) {
     let pre = pre.get_register(register);
     let post = post.get_register(register);
     if pre != post {
-        println!(" ; {}:{}->{}", register, pre, post);
+        print!("{}:0x{:04x}->0x{:04x}", register, pre, post);
     }
 }
 
@@ -529,6 +954,21 @@ enum ArithmaticType {
     Sub,
     Xor,
     Cmp,
+}
+
+impl std::fmt::Display for ArithmaticType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            ArithmaticType::Add => write!(f, "add"),
+            ArithmaticType::Or => write!(f, "or"),
+            ArithmaticType::Adc => write!(f, "adc"),
+            ArithmaticType::Sbb => write!(f, "sbb"),
+            ArithmaticType::And => write!(f, "and"),
+            ArithmaticType::Sub => write!(f, "sub"),
+            ArithmaticType::Xor => write!(f, "xor"),
+            ArithmaticType::Cmp => write!(f, "cmp"),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -636,11 +1076,6 @@ const EFFECTIVE_ADDRESS: [&str; 8] = ["bx+si", "bx+di", "bp+si", "bp+di", "si", 
 
 fn get_effective_address(rm: usize) -> &'static str {
     EFFECTIVE_ADDRESS[rm]
-}
-
-/// Prints a `comment` to our decoded assembly
-fn print_comment(comment: String) {
-    println!("; {comment}");
 }
 
 fn main() -> io::Result<()> {
@@ -799,7 +1234,7 @@ fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> Instruction 
                 left: Operand::Register(Register::from_str(reg)),
                 right: Operand::Address(effective_address_formula),
             },
-            str_rep: format!("{op:?} {reg}, {effective_address_formula}"),
+            str_rep: format!("{op} {reg}, {effective_address_formula}"),
         }
     } else {
         Instruction {
@@ -808,7 +1243,7 @@ fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> Instruction 
                 left: Operand::Address(effective_address_formula),
                 right: Operand::Register(Register::from_str(reg)),
             },
-            str_rep: format!("{op:?} {effective_address_formula}, {reg}"),
+            str_rep: format!("{op} {effective_address_formula}, {reg}"),
         }
     }
 }
@@ -897,9 +1332,6 @@ fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> Instruction {
 
     let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
 
-    print_comment(format!(
-        "signed_extension: {signed_extension}, wide: {wide}"
-    ));
     data.push(cpu.next_instruction().unwrap());
     let immediate = if wide {
         if signed_extension {
@@ -918,7 +1350,7 @@ fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> Instruction {
     let width_specifier = if wide { "word " } else { "byte " };
 
     Instruction {
-        str_rep: format!("{op:?} {width_specifier}{effective_address_formula}, {immediate}"),
+        str_rep: format!("{op} {width_specifier}{effective_address_formula}, {immediate}"),
         op: Operation::ArithmaticImmediateToRegisterOrMemory(op, wide),
         operands: Operands {
             left: Operand::Address(effective_address_formula),
@@ -1008,7 +1440,7 @@ fn arithmatic_immediate_with_accumulator(byte: u8, cpu: &mut Cpu) -> Instruction
 
     // format!("{op} {reg}, {immediate}");
     Instruction {
-        str_rep: format!("{op:?} {reg}, {immediate}"),
+        str_rep: format!("{op} {reg}, {immediate}"),
         op: Operation::ArithmaticImmediateWithAccumulator,
         operands: Operands {
             left: Operand::Register(if wide { Register::Ax } else { Register::Al }),
