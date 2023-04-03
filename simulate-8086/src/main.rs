@@ -342,8 +342,8 @@ impl std::fmt::LowerHex for MemoryValue {
 impl std::fmt::Display for MemoryValue {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            MemoryValue::Byte(value) => write!(f, "{:#x}", value),
-            MemoryValue::Word(value) => write!(f, "{:#x}", value),
+            MemoryValue::Byte(value) => write!(f, "{:#}", value),
+            MemoryValue::Word(value) => write!(f, "{:#}", value),
         }
     }
 }
@@ -408,6 +408,15 @@ impl Cpu {
             }
             Operation::MovRegisterMemoryToFromRegister => {
                 match (&instruction.operands.left, &instruction.operands.right) {
+                    (
+                        Operand::Register(dest_register),
+                        Operand::Address(Address::Register(source_register)),
+                    ) => {
+                        self.registers.set_register(
+                            *dest_register,
+                            self.registers.get_register(*source_register),
+                        );
+                    }
                     (Operand::Register(register), Operand::Address(effective_address)) => {
                         self.registers.set_register(
                             *register,
@@ -446,185 +455,40 @@ impl Cpu {
             Operation::ArithmaticImmediateWithAccumulator => {}
         }
         let post_op_registers = self.registers;
-        register_changed(Register::Ax, pre_op_registers, post_op_registers);
-        register_changed(Register::Bx, pre_op_registers, post_op_registers);
-        register_changed(Register::Cx, pre_op_registers, post_op_registers);
-        register_changed(Register::Dx, pre_op_registers, post_op_registers);
-        register_changed(Register::Sp, pre_op_registers, post_op_registers);
-        register_changed(Register::Bp, pre_op_registers, post_op_registers);
-        register_changed(Register::Si, pre_op_registers, post_op_registers);
-        register_changed(Register::Di, pre_op_registers, post_op_registers);
-        register_changed(Register::Cs, pre_op_registers, post_op_registers);
-        register_changed(Register::Ds, pre_op_registers, post_op_registers);
-        register_changed(Register::Ss, pre_op_registers, post_op_registers);
-        register_changed(Register::Es, pre_op_registers, post_op_registers);
-        register_changed(Register::Ip, pre_op_registers, post_op_registers);
+        for register in Self::DEBUG_REGISTERS {
+            register_changed(register, pre_op_registers, post_op_registers);
+        }
     }
 
-    /// Prints the current value in each register to the console
-    ///
-    /// Example output:
-    /// ````
-    ///      ax: 0x0001 (1)
-    ///      bx: 0x0002 (2)
-    ///      cx: 0x0003 (3)
-    ///      dx: 0x0004 (4)
-    ///      sp: 0x0005 (5)
-    ///      bp: 0x0006 (6)
-    ///      si: 0x0007 (7)
-    ///      di: 0x0008 (8)
-    /// ````
-    ///
+    const DEBUG_REGISTERS: [Register; 13] = [
+        Register::Ax,
+        Register::Bx,
+        Register::Cx,
+        Register::Dx,
+        Register::Sp,
+        Register::Bp,
+        Register::Si,
+        Register::Di,
+        Register::Cs,
+        Register::Ds,
+        Register::Ss,
+        Register::Es,
+        Register::Ip,
+    ];
+
     fn print_registers(&self) {
-        println!(
-            "\tax: 0x{:04x} ({})",
-            self.registers.get_register(Register::Ax),
-            self.registers.get_register(Register::Ax)
-        );
-        println!(
-            "\tbx: 0x{:04x} ({})",
-            self.registers.get_register(Register::Bx),
-            self.registers.get_register(Register::Bx)
-        );
-        println!(
-            "\tcx: 0x{:04x} ({})",
-            self.registers.get_register(Register::Cx),
-            self.registers.get_register(Register::Cx)
-        );
-        println!(
-            "\tdx: 0x{:04x} ({})",
-            self.registers.get_register(Register::Dx),
-            self.registers.get_register(Register::Dx)
-        );
-        println!(
-            "\tsp: 0x{:04x} ({})",
-            self.registers.get_register(Register::Sp),
-            self.registers.get_register(Register::Sp)
-        );
-        println!(
-            "\tbp: 0x{:04x} ({})",
-            self.registers.get_register(Register::Bp),
-            self.registers.get_register(Register::Bp)
-        );
-        println!(
-            "\tsi: 0x{:04x} ({})",
-            self.registers.get_register(Register::Si),
-            self.registers.get_register(Register::Si)
-        );
-        println!(
-            "\tdi: 0x{:04x} ({})",
-            self.registers.get_register(Register::Di),
-            self.registers.get_register(Register::Di)
-        );
-        println!(
-            "\tcs: 0x{:04x} ({})",
-            self.registers.get_register(Register::Cs),
-            self.registers.get_register(Register::Cs)
-        );
-        println!(
-            "\tds: 0x{:04x} ({})",
-            self.registers.get_register(Register::Ds),
-            self.registers.get_register(Register::Ds)
-        );
-        println!(
-            "\tss: 0x{:04x} ({})",
-            self.registers.get_register(Register::Ss),
-            self.registers.get_register(Register::Ss)
-        );
-        println!(
-            "\tes: 0x{:04x} ({})",
-            self.registers.get_register(Register::Es),
-            self.registers.get_register(Register::Es)
-        );
-        println!(
-            "\tip: 0x{:04x} ({})",
-            self.registers.get_register(Register::Ip),
-            self.registers.get_register(Register::Ip)
-        );
+        for register in Self::DEBUG_REGISTERS {
+            let value = self.registers.get_register(register);
+            println!("\t{register}: 0x{value:04x} ({value})",);
+        }
     }
 }
 
 fn register_changed(register: Register, pre: Registers, post: Registers) {
-    match register {
-        Register::Ax => {
-            let pre_h = pre.get_register(Register::Ah);
-            let post_h = post.get_register(Register::Ah);
-            let pre_l = pre.get_register(Register::Al);
-            let post_l = post.get_register(Register::Al);
-            if pre_h != post_h && pre_l != post_l {
-                println!(
-                    " ; {}:{}->{}",
-                    Register::Ax,
-                    pre.get_register(Register::Ax),
-                    post.get_register(Register::Ax)
-                );
-            } else if pre_h != post_h {
-                println!(" ; {}:{}->{}", Register::Ah, pre_h, post_h);
-            } else if pre_l != post_l {
-                println!(" ; {}:{}->{}", Register::Al, pre_l, post_l);
-            }
-        }
-        Register::Bx => {
-            let pre_h = pre.get_register(Register::Bh);
-            let post_h = post.get_register(Register::Bh);
-            let pre_l = pre.get_register(Register::Bl);
-            let post_l = post.get_register(Register::Bl);
-            if pre_h != post_h && pre_l != post_l {
-                println!(
-                    " ; {}:{}->{}",
-                    Register::Bx,
-                    pre.get_register(Register::Bx),
-                    post.get_register(Register::Bx)
-                );
-            } else if pre_h != post_h {
-                println!(" ; {}:{}->{}", Register::Bh, pre_h, post_h);
-            } else if pre_l != post_l {
-                println!(" ; {}:{}->{}", Register::Bl, pre_l, post_l);
-            }
-        }
-        Register::Cx => {
-            let pre_h = pre.get_register(Register::Ch);
-            let post_h = post.get_register(Register::Ch);
-            let pre_l = pre.get_register(Register::Cl);
-            let post_l = post.get_register(Register::Cl);
-            if pre_h != post_h && pre_l != post_l {
-                println!(
-                    " ; {}:{}->{}",
-                    Register::Cx,
-                    pre.get_register(Register::Cx),
-                    post.get_register(Register::Cx)
-                );
-            } else if pre_h != post_h {
-                println!(" ; {}:{}->{}", Register::Ch, pre_h, post_h);
-            } else if pre_l != post_l {
-                println!(" ; {}:{}->{}", Register::Cl, pre_l, post_l);
-            }
-        }
-        Register::Dx => {
-            let pre_h = pre.get_register(Register::Dh);
-            let post_h = post.get_register(Register::Dh);
-            let pre_l = pre.get_register(Register::Dl);
-            let post_l = post.get_register(Register::Dl);
-            if pre_h != post_h && pre_l != post_l {
-                println!(
-                    " ; {}:{}->{}",
-                    Register::Dx,
-                    pre.get_register(Register::Dx),
-                    post.get_register(Register::Dx)
-                );
-            } else if pre_h != post_h {
-                println!(" ; {}:{}->{}", Register::Dh, pre_h, post_h);
-            } else if pre_l != post_l {
-                println!(" ; {}:{}->{}", Register::Dl, pre_l, post_l);
-            }
-        }
-        register => {
-            let pre = pre.get_register(register);
-            let post = post.get_register(register);
-            if pre != post {
-                println!(" ; {}:{}->{}", register, pre, post);
-            }
-        }
+    let pre = pre.get_register(register);
+    let post = post.get_register(register);
+    if pre != post {
+        println!(" ; {}:{}->{}", register, pre, post);
     }
 }
 
@@ -705,8 +569,10 @@ enum Operand {
     None,
 }
 
-const OPCODES: [(u8, u8, &str); 12] = [
+const OPCODES: [(u8, u8, &str); 14] = [
     (0b1000_1000, 0b1111_1100, "mov-reg_mem-to_from-reg"),
+    (0b1000_1110, 0b1111_1111, "mov-reg_mem-to_seg-reg"),
+    (0b1000_1100, 0b1111_1111, "mov-seg-reg-to-reg_mem"),
     (0b1011_0000, 0b1111_0000, "mov-immediate-to-reg"),
     (0b1100_0110, 0b1111_1110, "mov-immediate-to-reg_mem"),
     (0b1010_0000, 0b1111_1110, "mov-memory-to-accumulator"),
@@ -800,6 +666,8 @@ fn main() -> io::Result<()> {
         let instruction = get_instruction(byte).unwrap();
 
         let instruction = match instruction {
+            "mov-reg_mem-to_seg-reg" => mov_seg_reg_to_from_reg_mem(&mut cpu, true),
+            "mov-seg-reg-to-reg_mem" => mov_seg_reg_to_from_reg_mem(&mut cpu, false),
             "mov-reg_mem-to_from-reg" => mov_reg_mem_to_from_reg(byte, &mut cpu),
             "mov-immediate-to-reg" => mov_immediate_to_reg(byte, &mut cpu),
             "mov-immediate-to-reg_mem" => mov_immediate_to_reg_mem(byte, &mut cpu),
@@ -941,6 +809,43 @@ fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> Instruction 
                 right: Operand::Register(Register::from_str(reg)),
             },
             str_rep: format!("{op:?} {effective_address_formula}, {reg}"),
+        }
+    }
+}
+
+const SEGMENT_REGISTERS: [Register; 4] = [
+    Register::Es, // 00
+    Register::Cs, // 01
+    Register::Ss, // 10
+    Register::Ds, // 11
+];
+
+/// Parses MOV instructions that use the segment registers.
+///
+fn mov_seg_reg_to_from_reg_mem(cpu: &mut Cpu, register_is_destination: bool) -> Instruction {
+    let mut data = vec![cpu.next_instruction().unwrap()];
+
+    let segment_register = SEGMENT_REGISTERS[(data[0] >> 3 & 3) as usize];
+
+    let effective_address_formula = get_effective_address_formula(&mut data, true, cpu);
+
+    if register_is_destination {
+        Instruction {
+            op: Operation::MovRegisterMemoryToFromRegister,
+            operands: Operands {
+                left: Operand::Register(segment_register),
+                right: Operand::Address(effective_address_formula),
+            },
+            str_rep: format!("mov {segment_register}, {effective_address_formula}"),
+        }
+    } else {
+        Instruction {
+            op: Operation::MovRegisterMemoryToFromRegister,
+            operands: Operands {
+                left: Operand::Address(effective_address_formula),
+                right: Operand::Register(segment_register),
+            },
+            str_rep: format!("mov {effective_address_formula}, {segment_register}"),
         }
     }
 }
