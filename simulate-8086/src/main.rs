@@ -23,6 +23,6 @@ fn main() -> std::io::Result<()> {
     // so we can easily re-encode our decode to test.
     println!("\nbits 16\n");
 
-    cpu.run();
+    cpu.run(false);
     Ok(())
 }

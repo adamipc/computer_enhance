@@ -19,75 +19,28 @@ impl Memory {
         self.buffer[address]
     }
 
-    pub fn get_address(&self, address: MemoryAddress) -> MemoryValue {
-        MemoryValue::Byte(self.buffer[address.address])
+    pub fn get_address_u8(&self, address: usize) -> u8 {
+        self.buffer[address]
     }
 
-    pub fn set_address(&mut self, address: Address, value: MemoryValue) {
-        match value {
-            MemoryValue::Byte(value) => self.buffer[address.to_memory_address().address] = value,
-            MemoryValue::Word(value) => {
-                let address = address.to_memory_address().address;
-                self.buffer[address] = (value >> 8) as u8;
-                self.buffer[address + 1] = value as u8;
-            }
-        }
+    pub fn get_address_u16(&self, address: usize) -> u16 {
+        let low = self.buffer[address];
+        let high = self.buffer[address + 1];
+        u16::from_le_bytes([low, high])
     }
-}
 
-#[derive(Debug, Copy, Clone)]
-enum Address {
-    Register(Register),
-    EffectiveFormula(EffectiveAddress),
-    MemoryAddress(MemoryAddress),
-}
+    pub fn set_address_u8(&mut self, address: usize, value: u8) {
+        self.buffer[address] = value
+    }
 
-impl std::fmt::Display for Address {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Register(register) => write!(f, "{}", register),
-            Self::EffectiveFormula(formula) => write!(f, "{}", formula),
-            Self::MemoryAddress(address) => write!(f, "{}", address),
-        }
+    pub fn set_address_u16(&mut self, address: usize, value: u16) {
+        let bytes = value.to_le_bytes();
+        self.buffer[address] = bytes[0];
+        self.buffer[address + 1] = bytes[1];
     }
 }
 
-impl Address {
-    pub fn to_memory_address(self) -> MemoryAddress {
-        match self {
-            Self::Register(register) => {
-                panic!("Can't get memory address for register: {}", register)
-            }
-            Self::MemoryAddress(address) => address,
-            Self::EffectiveFormula(effective_address) => MemoryAddress {
-                address: effective_address.to_memory_address(),
-            },
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-struct MemoryAddress {
-    address: usize,
-}
-
-impl std::convert::From<MemoryValue> for MemoryAddress {
-    fn from(value: MemoryValue) -> Self {
-        Self {
-            address: match value {
-                MemoryValue::Byte(value) => value as usize,
-                MemoryValue::Word(value) => value as usize,
-            },
-        }
-    }
-}
-
-impl std::fmt::Display for MemoryAddress {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}]", self.address)
-    }
-}
-
+// TODO: Change this to a struct with an EffectiveAddressType field and a displacement field
 #[derive(Debug, Copy, Clone)]
 enum EffectiveAddress {
     BxSi(u16),
@@ -103,14 +56,14 @@ enum EffectiveAddress {
 impl std::fmt::Display for EffectiveAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::BxSi(displacement) => write!(f, "[bx+si+{}]", displacement),
-            Self::BxDi(displacement) => write!(f, "[bx+di+{}]", displacement),
-            Self::BpSi(displacement) => write!(f, "[bp+si+{}]", displacement),
-            Self::BpDi(displacement) => write!(f, "[bp+di+{}]", displacement),
-            Self::Si(displacement) => write!(f, "[si+{}]", displacement),
-            Self::Di(displacement) => write!(f, "[di+{}]", displacement),
-            Self::Bp(displacement) => write!(f, "[bp+{}]", displacement),
-            Self::Bx(displacement) => write!(f, "[bx+{}]", displacement),
+            Self::BxSi(displacement) => write!(f, "[bx + si {:+}]", *displacement as i16),
+            Self::BxDi(displacement) => write!(f, "[bx + di {:+}]", *displacement as i16),
+            Self::BpSi(displacement) => write!(f, "[bp + si {:+}]", *displacement as i16),
+            Self::BpDi(displacement) => write!(f, "[bp + di {:+}]", *displacement as i16),
+            Self::Si(displacement) => write!(f, "[si {:+}]", *displacement as i16),
+            Self::Di(displacement) => write!(f, "[di {:+}]", *displacement as i16),
+            Self::Bp(displacement) => write!(f, "[bp {:+}]", *displacement as i16),
+            Self::Bx(displacement) => write!(f, "[bx {:+}]", *displacement as i16),
         }
     }
 }
@@ -131,10 +84,6 @@ impl EffectiveAddress {
                 effective_address_formula
             ),
         }
-    }
-
-    fn to_memory_address(self) -> usize {
-        todo!()
     }
 }
 
@@ -203,14 +152,8 @@ impl Registers {
         self.instruction_pointer += 1
     }
 
-    fn set_high_byte(byte: &mut u16, value: u8) {
-        *byte &= 0x00FF; // clear high byte
-        *byte |= (value as u16) << 8; // set high byte
-    }
-
-    fn set_low_byte(byte: &mut u16, value: u8) {
-        *byte &= 0xFF00; // clear low byte
-        *byte |= value as u16; // set low byte
+    pub fn jump_to_offset(&mut self, offset: i8) {
+        self.instruction_pointer = (self.instruction_pointer as i16 + offset as i16) as u16;
     }
 
     pub fn get_flag(&self, flag: Flag) -> bool {
@@ -295,72 +238,69 @@ impl Registers {
         }
     }
 
-    pub fn set_register(&mut self, register: Register, value: MemoryValue) {
-        match (register, value) {
-            (Register::Ax, MemoryValue::Word(value)) => self.general[0] = value,
-            (Register::Bx, MemoryValue::Word(value)) => self.general[1] = value,
-            (Register::Cx, MemoryValue::Word(value)) => self.general[2] = value,
-            (Register::Dx, MemoryValue::Word(value)) => self.general[3] = value,
-            (Register::Ah, MemoryValue::Byte(value)) => {
-                Registers::set_high_byte(&mut self.general[0], value)
-            }
-            (Register::Bh, MemoryValue::Byte(value)) => {
-                Registers::set_high_byte(&mut self.general[1], value)
-            }
-            (Register::Ch, MemoryValue::Byte(value)) => {
-                Registers::set_high_byte(&mut self.general[2], value)
-            }
-            (Register::Dh, MemoryValue::Byte(value)) => {
-                Registers::set_high_byte(&mut self.general[3], value)
-            }
-            (Register::Al, MemoryValue::Byte(value)) => {
-                Registers::set_low_byte(&mut self.general[0], value)
-            }
-            (Register::Bl, MemoryValue::Byte(value)) => {
-                Registers::set_low_byte(&mut self.general[1], value)
-            }
-            (Register::Cl, MemoryValue::Byte(value)) => {
-                Registers::set_low_byte(&mut self.general[2], value)
-            }
-            (Register::Dl, MemoryValue::Byte(value)) => {
-                Registers::set_low_byte(&mut self.general[3], value)
-            }
-            (Register::Sp, MemoryValue::Word(value)) => self.general[4] = value,
-            (Register::Bp, MemoryValue::Word(value)) => self.general[5] = value,
-            (Register::Si, MemoryValue::Word(value)) => self.general[6] = value,
-            (Register::Di, MemoryValue::Word(value)) => self.general[7] = value,
-            (Register::Cs, MemoryValue::Word(value)) => self.segment[0] = value,
-            (Register::Ds, MemoryValue::Word(value)) => self.segment[1] = value,
-            (Register::Ss, MemoryValue::Word(value)) => self.segment[2] = value,
-            (Register::Es, MemoryValue::Word(value)) => self.segment[3] = value,
-            (Register::Ip, MemoryValue::Word(value)) => self.instruction_pointer = value,
-            (register, value) => panic!("Register {register:?} can't take a {value:?}"),
+    pub fn set_register_u16(&mut self, register: Register, value: u16) {
+        match register {
+            Register::Ax => self.general[0] = value,
+            Register::Bx => self.general[1] = value,
+            Register::Cx => self.general[2] = value,
+            Register::Dx => self.general[3] = value,
+            Register::Si => self.general[4] = value,
+            Register::Di => self.general[5] = value,
+            Register::Sp => self.general[6] = value,
+            Register::Bp => self.general[7] = value,
+            Register::Cs => self.segment[0] = value,
+            Register::Ds => self.segment[1] = value,
+            Register::Es => self.segment[2] = value,
+            Register::Ss => self.segment[3] = value,
+            Register::Ip => self.instruction_pointer = value,
+            _ => panic!("Invalid register"),
         }
     }
 
-    pub fn get_register(&self, register: Register) -> MemoryValue {
+    pub fn set_register_u8(&mut self, register: Register, value: u8) {
         match register {
-            Register::Ax => MemoryValue::Word(self.general[0]),
-            Register::Bx => MemoryValue::Word(self.general[1]),
-            Register::Cx => MemoryValue::Word(self.general[2]),
-            Register::Dx => MemoryValue::Word(self.general[3]),
-            Register::Ah => MemoryValue::Byte(self.general[0].to_be_bytes()[0]),
-            Register::Bh => MemoryValue::Byte(self.general[1].to_be_bytes()[0]),
-            Register::Ch => MemoryValue::Byte(self.general[2].to_be_bytes()[0]),
-            Register::Dh => MemoryValue::Byte(self.general[3].to_be_bytes()[0]),
-            Register::Al => MemoryValue::Byte(self.general[0].to_be_bytes()[1]),
-            Register::Bl => MemoryValue::Byte(self.general[1].to_be_bytes()[1]),
-            Register::Cl => MemoryValue::Byte(self.general[2].to_be_bytes()[1]),
-            Register::Dl => MemoryValue::Byte(self.general[3].to_be_bytes()[1]),
-            Register::Sp => MemoryValue::Word(self.general[4]),
-            Register::Bp => MemoryValue::Word(self.general[5]),
-            Register::Si => MemoryValue::Word(self.general[6]),
-            Register::Di => MemoryValue::Word(self.general[7]),
-            Register::Cs => MemoryValue::Word(self.segment[0]),
-            Register::Ds => MemoryValue::Word(self.segment[1]),
-            Register::Ss => MemoryValue::Word(self.segment[2]),
-            Register::Es => MemoryValue::Word(self.segment[3]),
-            Register::Ip => MemoryValue::Word(self.instruction_pointer),
+            Register::Al => self.general[0] = (self.general[0] & 0xFF00) | value as u16,
+            Register::Bl => self.general[1] = (self.general[1] & 0xFF00) | value as u16,
+            Register::Cl => self.general[2] = (self.general[2] & 0xFF00) | value as u16,
+            Register::Dl => self.general[3] = (self.general[3] & 0xFF00) | value as u16,
+            Register::Ah => self.general[0] = (self.general[0] & 0x00FF) | ((value as u16) << 8),
+            Register::Bh => self.general[1] = (self.general[1] & 0x00FF) | ((value as u16) << 8),
+            Register::Ch => self.general[2] = (self.general[2] & 0x00FF) | ((value as u16) << 8),
+            Register::Dh => self.general[3] = (self.general[3] & 0x00FF) | ((value as u16) << 8),
+            _ => panic!("Invalid register"),
+        }
+    }
+
+    pub fn get_register_u16(&self, register: Register) -> u16 {
+        match register {
+            Register::Ax => self.general[0],
+            Register::Bx => self.general[1],
+            Register::Cx => self.general[2],
+            Register::Dx => self.general[3],
+            Register::Si => self.general[4],
+            Register::Di => self.general[5],
+            Register::Sp => self.general[6],
+            Register::Bp => self.general[7],
+            Register::Cs => self.segment[0],
+            Register::Ds => self.segment[1],
+            Register::Es => self.segment[2],
+            Register::Ss => self.segment[3],
+            Register::Ip => self.instruction_pointer,
+            _ => panic!("Invalid register"),
+        }
+    }
+
+    pub fn get_register_u8(&self, register: Register) -> u8 {
+        match register {
+            Register::Al => (self.general[0] & 0x00FF) as u8,
+            Register::Bl => (self.general[1] & 0x00FF) as u8,
+            Register::Cl => (self.general[2] & 0x00FF) as u8,
+            Register::Dl => (self.general[3] & 0x00FF) as u8,
+            Register::Ah => (self.general[0] >> 8) as u8,
+            Register::Bh => (self.general[1] >> 8) as u8,
+            Register::Ch => (self.general[2] >> 8) as u8,
+            Register::Dh => (self.general[3] >> 8) as u8,
+            _ => panic!("Invalid register"),
         }
     }
 }
@@ -418,126 +358,6 @@ impl std::fmt::Display for Register {
     }
 }
 
-impl Register {
-    pub fn from_str(register: &str) -> Register {
-        match &register.to_lowercase()[..] {
-            "ax" => Register::Ax,
-            "bx" => Register::Bx,
-            "cx" => Register::Cx,
-            "dx" => Register::Dx,
-            "al" => Register::Al,
-            "bl" => Register::Bl,
-            "cl" => Register::Cl,
-            "dl" => Register::Dl,
-            "ah" => Register::Ah,
-            "bh" => Register::Bh,
-            "ch" => Register::Ch,
-            "dh" => Register::Dh,
-            "sp" => Register::Sp,
-            "bp" => Register::Bp,
-            "si" => Register::Si,
-            "di" => Register::Di,
-            "cs" => Register::Cs,
-            "ds" => Register::Ds,
-            "ss" => Register::Ss,
-            "es" => Register::Es,
-            "ip" => Register::Ip,
-            register => panic!("Unknown register: {register}"),
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
-enum MemoryValue {
-    Byte(u8),
-    Word(u16),
-}
-
-impl MemoryValue {
-    pub fn count_ones(&self) -> u32 {
-        match self {
-            MemoryValue::Byte(byte) => byte.count_ones(),
-            MemoryValue::Word(word) => word.count_ones(),
-        }
-    }
-}
-
-impl std::convert::From<i32> for MemoryValue {
-    fn from(value: i32) -> Self {
-        MemoryValue::Word(value as u16)
-    }
-}
-
-impl std::ops::Add for MemoryValue {
-    type Output = MemoryValue;
-
-    fn add(self, other: MemoryValue) -> MemoryValue {
-        match (self, other) {
-            (MemoryValue::Byte(a), MemoryValue::Byte(b)) => MemoryValue::Byte(a + b),
-            (MemoryValue::Word(a), MemoryValue::Word(b)) => MemoryValue::Word(a + b),
-            (MemoryValue::Byte(a), MemoryValue::Word(b)) => MemoryValue::Word(a as u16 + b),
-            (MemoryValue::Word(a), MemoryValue::Byte(b)) => MemoryValue::Word(a + b as u16),
-        }
-    }
-}
-
-impl std::ops::Sub for MemoryValue {
-    type Output = MemoryValue;
-
-    fn sub(self, other: MemoryValue) -> MemoryValue {
-        match (self, other) {
-            (MemoryValue::Byte(a), MemoryValue::Byte(b)) => MemoryValue::Byte(a - b),
-            (MemoryValue::Word(a), MemoryValue::Word(b)) => MemoryValue::Word(a - b),
-            (MemoryValue::Byte(a), MemoryValue::Word(b)) => MemoryValue::Word(a as u16 - b),
-            (MemoryValue::Word(a), MemoryValue::Byte(b)) => MemoryValue::Word(a - b as u16),
-        }
-    }
-}
-
-impl std::ops::BitAnd for MemoryValue {
-    type Output = MemoryValue;
-
-    fn bitand(self, other: MemoryValue) -> MemoryValue {
-        match (self, other) {
-            (MemoryValue::Byte(a), MemoryValue::Byte(b)) => MemoryValue::Byte(a & b),
-            (MemoryValue::Word(a), MemoryValue::Word(b)) => MemoryValue::Word(a & b),
-            (MemoryValue::Byte(a), MemoryValue::Word(b)) => MemoryValue::Word(a as u16 & b),
-            (MemoryValue::Word(a), MemoryValue::Byte(b)) => MemoryValue::Word(a & b as u16),
-        }
-    }
-}
-
-impl std::ops::BitOr for MemoryValue {
-    type Output = MemoryValue;
-
-    fn bitor(self, other: MemoryValue) -> MemoryValue {
-        match (self, other) {
-            (MemoryValue::Byte(a), MemoryValue::Byte(b)) => MemoryValue::Byte(a | b),
-            (MemoryValue::Word(a), MemoryValue::Word(b)) => MemoryValue::Word(a | b),
-            (MemoryValue::Byte(a), MemoryValue::Word(b)) => MemoryValue::Word(a as u16 | b),
-            (MemoryValue::Word(a), MemoryValue::Byte(b)) => MemoryValue::Word(a | b as u16),
-        }
-    }
-}
-
-impl std::fmt::LowerHex for MemoryValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            MemoryValue::Byte(value) => write!(f, "{:02x}", value),
-            MemoryValue::Word(value) => write!(f, "{:04x}", value),
-        }
-    }
-}
-
-impl std::fmt::Display for MemoryValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            MemoryValue::Byte(value) => write!(f, "{:#}", value),
-            MemoryValue::Word(value) => write!(f, "{:#}", value),
-        }
-    }
-}
-
 impl Default for Cpu {
     fn default() -> Self {
         Self::new()
@@ -564,20 +384,21 @@ impl Cpu {
     }
 
     pub fn next_instruction(&mut self) -> Option<u8> {
-        if let MemoryValue::Word(ip) = self.registers.get_register(Register::Ip) {
-            let next_instruction = self.memory.read_u8(self.registers.code_segment() * 64 + ip);
-            self.registers.increment_instruction_pointer();
-            if self.last_instruction < self.registers.instruction_pointer.try_into().unwrap() {
-                None
-            } else {
-                Some(next_instruction)
-            }
-        } else {
+        let ip = self.registers.get_register_u16(Register::Ip);
+        let next_instruction = self
+            .memory
+            .read_u8(self.registers.code_segment() * 64 * 1024 + ip);
+        self.registers.increment_instruction_pointer();
+        if self.last_instruction < self.registers.instruction_pointer.try_into().unwrap() {
             None
+        } else {
+            Some(next_instruction)
         }
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self, execute: bool) {
+        let mut instruction_count = 0;
+        let mut pre_op_registers = self.registers;
         while let Some(byte) = self.next_instruction() {
             let instruction = get_instruction(byte).unwrap();
 
@@ -601,252 +422,334 @@ impl Cpu {
                 &_ => todo!("Not yet implemented {instruction}"),
             };
 
-            self.execute(&instruction);
+            if execute {
+                self.execute(&instruction);
+                print!("\t; ");
+                let post_op_registers = self.registers;
+                for register in Self::DEBUG_REGISTERS {
+                    register_changed(register, pre_op_registers, post_op_registers);
+                }
+                let pre_flags: String = Self::DEBUG_FLAGS
+                    .iter()
+                    .filter(|f| pre_op_registers.get_flag(**f))
+                    .map(|f| format!("{}", f))
+                    .collect();
+                let post_flags: String = Self::DEBUG_FLAGS
+                    .iter()
+                    .filter(|f| post_op_registers.get_flag(**f))
+                    .map(|f| format!("{}", f))
+                    .collect();
+                if pre_flags != post_flags {
+                    print!(" flags:{}->{}", pre_flags, post_flags);
+                }
+                println!();
+
+                pre_op_registers = self.registers;
+
+                instruction_count += 1;
+
+                if instruction_count > 100 {
+                    panic!("Too many instructions.");
+                }
+            } else {
+                println!("{}", instruction.str_rep);
+            }
         }
-        println!("\nFinal registers:");
-        self.print_registers();
+        if execute {
+            println!("\nFinal registers:");
+            self.print_registers(pre_op_registers);
+        }
     }
 
     pub fn execute(&mut self, instruction: &Instruction) {
         //print_comment(format!("Going to execute instruction: {instruction:?}"));
         print!("{}", instruction.str_rep);
-        let pre_op_registers = self.registers;
         match &instruction.op {
-            Operation::MoveMemoryToAccumulator => {
-                todo!()
+            Operation::MoveMemoryToAccumulator(wide)
+            | Operation::MoveAccumulatorToMemory(wide)
+            | Operation::MoveImmediateToRegister(wide)
+            | Operation::MoveRegisterMemoryToFromRegister(wide)
+            | Operation::MoveImmediateToRegisterOrMemory(wide) => {
+                self.execute_mov_instruction(instruction, *wide);
             }
-            Operation::MoveAccumulatorToMemory => {
-                todo!()
-            }
-            Operation::MovImmediateToRegister => {
-                match (&instruction.operands.left, &instruction.operands.right) {
-                    (Operand::Register(register), Operand::ImmediateWord(value)) => {
-                        self.registers
-                            .set_register(*register, MemoryValue::Word(*value));
-                    }
-                    (Operand::Register(register), Operand::ImmediateByte(value)) => {
-                        self.registers
-                            .set_register(*register, MemoryValue::Byte(*value));
-                    }
-                    (left, right) => {
-                        panic!(
-                            "{:?} not defined for operands: ({left:?}, {right:?})",
-                            instruction.op
-                        )
-                    }
-                }
-            }
-            Operation::MovRegisterMemoryToFromRegister => {
-                match (&instruction.operands.left, &instruction.operands.right) {
-                    (
-                        Operand::Register(dest_register),
-                        Operand::Address(Address::Register(source_register)),
-                    ) => {
-                        self.registers.set_register(
-                            *dest_register,
-                            self.registers.get_register(*source_register),
-                        );
-                    }
-                    (Operand::Register(register), Operand::Address(effective_address)) => {
-                        self.registers.set_register(
-                            *register,
-                            self.memory
-                                .get_address(effective_address.to_memory_address()),
-                        );
-                    }
-                    (
-                        Operand::Address(Address::Register(dest_register)),
-                        Operand::Register(source_register),
-                    ) => {
-                        self.registers.set_register(
-                            *dest_register,
-                            self.registers.get_register(*source_register),
-                        );
-                    }
-                    (Operand::Address(effective_address), Operand::Register(register)) => {
-                        self.memory.set_address(
-                            *effective_address,
-                            self.registers.get_register(*register),
-                        );
-                    }
-                    (left, right) => {
-                        panic!(
-                            "{:?} not defined for operands: ({left:?}, {right:?})",
-                            instruction.op
-                        )
-                    }
-                }
-            }
-            Operation::MoveImmediateToRegisterOrMemory(_wide) => {
-                todo!()
-            }
-            Operation::Jump(_jump_type) => {
-                todo!()
-            }
-            Operation::Loop(_loop_type) => {
-                todo!()
-            }
-            Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(arithmatic_type) => {
-                let (dest, source) = match (&instruction.operands.left, &instruction.operands.right)
-                {
-                    (Operand::Register(register), Operand::Address(address)) => {
-                        (Address::Register(*register), *address)
-                    }
-                    (Operand::Address(address), Operand::Register(register)) => {
-                        (*address, Address::Register(*register))
+            Operation::Jump(jump_type) => match jump_type {
+                JumpType::Jne => match &instruction.operands.left {
+                    Operand::SignedInstructionPointerIncrement(imm) => {
+                        if *imm < 0 {
+                            if !self.registers.get_flag(Flag::Zf) {
+                                self.registers.set_register_u16(
+                                    Register::Ip,
+                                    self.registers.get_register_u16(Register::Ip)
+                                        - imm.unsigned_abs() as u16,
+                                );
+                            }
+                        } else if !self.registers.get_flag(Flag::Zf) {
+                            self.registers.set_register_u16(
+                                Register::Ip,
+                                self.registers.get_register_u16(Register::Ip) + *imm as u16,
+                            );
+                        }
                     }
                     _ => panic!(
-                        "Invalid operands for arithmatic operation {:?}",
-                        instruction.operands
+                        "Jne not defined for operand: {:?}",
+                        instruction.operands.left
                     ),
-                };
-
-                match arithmatic_type {
-                    ArithmaticType::Add => {
-                        self.set_address(dest, self.get_address(dest) + self.get_address(source))
-                    }
-                    ArithmaticType::Adc => {
-                        todo!()
-                    }
-                    ArithmaticType::Or => {
-                        todo!()
-                    }
-                    ArithmaticType::Sbb => {
-                        todo!()
-                    }
-                    ArithmaticType::And => {
-                        todo!()
-                    }
-                    ArithmaticType::Sub => {
-                        let result = self.get_address(dest) - self.get_address(source);
-                        self.set_address(dest, result);
-
-                        // Set Flag::Sf if the most significant bit is set in result
-                        self.registers
-                            .set_flag(Flag::Sf, result & 0x8000.into() != 0.into());
-                    }
-                    ArithmaticType::Xor => {
-                        todo!()
-                    }
-                    ArithmaticType::Cmp => {
-                        match self
-                            .get_address(dest)
-                            .partial_cmp(&self.get_address(source))
-                        {
-                            Some(Ordering::Less) => {
-                                self.registers.set_flag(Flag::Sf, true);
-                                self.registers.set_flag(Flag::Zf, false);
-                                self.registers.set_flag(Flag::Cf, true);
-                            }
-                            Some(Ordering::Equal) => {
-                                self.registers.set_flag(Flag::Sf, false);
-                                self.registers.set_flag(Flag::Zf, true);
-                                self.registers.set_flag(Flag::Cf, false);
-                            }
-                            Some(Ordering::Greater) => {
-                                self.registers.set_flag(Flag::Sf, false);
-                                self.registers.set_flag(Flag::Zf, false);
-                                self.registers.set_flag(Flag::Cf, false);
-                            }
-                            None => todo!(),
+                },
+                JumpType::Je => match &instruction.operands.left {
+                    Operand::SignedInstructionPointerIncrement(imm) => {
+                        if self.registers.get_flag(Flag::Zf) {
+                            self.registers.jump_to_offset(*imm);
                         }
                     }
-                }
-            }
-            Operation::ArithmaticImmediateToRegisterOrMemory(arithmatic_type, _wide) => {
-                let (dest, immediate) =
-                    match (&instruction.operands.left, &instruction.operands.right) {
-                        (
-                            Operand::Address(Address::Register(register)),
-                            Operand::ImmediateWord(immediate),
-                        ) => (Address::Register(*register), MemoryValue::Word(*immediate)),
-                        _ => panic!(
-                            "Invalid operands for arithmatic operation {:?}",
-                            instruction.operands
-                        ),
-                    };
-
-                let (result, update_dest) = match arithmatic_type {
-                    ArithmaticType::Add => (self.get_address(dest) + immediate, true),
-                    ArithmaticType::Adc => {
-                        todo!()
-                    }
-                    ArithmaticType::Or => {
-                        todo!()
-                    }
-                    ArithmaticType::Sbb => {
-                        todo!()
-                    }
-                    ArithmaticType::And => {
-                        todo!()
-                    }
-                    ArithmaticType::Sub => (self.get_address(dest) - immediate, true),
-                    ArithmaticType::Xor => {
-                        todo!()
-                    }
-                    ArithmaticType::Cmp => (0.into(), false),
-                };
-
-                if update_dest {
-                    self.set_address(dest, result);
-                }
-
-                match arithmatic_type {
-                    ArithmaticType::Sub | ArithmaticType::Cmp => {
-                        match self.get_address(dest).partial_cmp(&immediate) {
-                            Some(Ordering::Less) => {
-                                self.registers.set_flag(Flag::Sf, true);
-                                self.registers.set_flag(Flag::Zf, false);
-                                self.registers.set_flag(Flag::Cf, true);
-                            }
-                            Some(Ordering::Equal) => {
-                                self.registers.set_flag(Flag::Sf, false);
-                                self.registers.set_flag(Flag::Zf, true);
-                                self.registers.set_flag(Flag::Cf, false);
-                            }
-                            Some(Ordering::Greater) => {
-                                self.registers.set_flag(Flag::Sf, false);
-                                self.registers.set_flag(Flag::Zf, false);
-                                self.registers.set_flag(Flag::Cf, false);
-                            }
-                            None => todo!(),
+                    _ => panic!(
+                        "Je not defined for operand: {:?}",
+                        instruction.operands.left
+                    ),
+                },
+                JumpType::Jb => match &instruction.operands.left {
+                    Operand::SignedInstructionPointerIncrement(imm) => {
+                        if self.registers.get_flag(Flag::Cf) {
+                            self.registers.jump_to_offset(*imm);
                         }
                     }
-                    _ => {}
-                }
-
-                match arithmatic_type {
-                    ArithmaticType::Sub | ArithmaticType::Cmp | ArithmaticType::Add => {
-                        // Set Flag::Pf if the result has even parity.
-                        self.registers
-                            .set_flag(Flag::Pf, result.count_ones() % 2 == 0);
+                    _ => panic!(
+                        "Jb not defined for operand: {:?}",
+                        instruction.operands.left
+                    ),
+                },
+                JumpType::Jp => match &instruction.operands.left {
+                    Operand::SignedInstructionPointerIncrement(imm) => {
+                        if self.registers.get_flag(Flag::Pf) {
+                            self.registers.jump_to_offset(*imm);
+                        }
                     }
-                    _ => {}
+                    _ => panic!(
+                        "Jp not defined for operand: {:?}",
+                        instruction.operands.left
+                    ),
+                },
+                _ => todo!(),
+            },
+            Operation::Loop(loop_type) => match loop_type {
+                LoopType::Loopnz => match &instruction.operands.left {
+                    Operand::SignedInstructionPointerIncrement(imm) => {
+                        if !self.registers.get_flag(Flag::Zf) {
+                            self.registers.set_register_u16(
+                                Register::Cx,
+                                self.registers.get_register_u16(Register::Cx) - 1,
+                            );
+                            if self.registers.get_register_u16(Register::Cx) != 0 {
+                                self.registers.jump_to_offset(*imm);
+                            }
+                        }
+                    }
+                    _ => panic!("Invalid operands for loopnz: {:?}", instruction.operands),
+                },
+                _ => todo!(),
+            },
+            Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(arithmatic_type, wide)
+            | Operation::ArithmaticImmediateToRegisterOrMemory(arithmatic_type, wide)
+            | Operation::ArithmaticImmediateWithAccumulator(arithmatic_type, wide) => {
+                self.execute_arithmatic_instruction(instruction, *arithmatic_type, *wide);
+            }
+        }
+    }
+
+    fn execute_mov_instruction(&mut self, instruction: &Instruction, wide: bool) {
+        let source_value = match &instruction.operands.right {
+            Operand::Register(register) => {
+                if wide {
+                    self.registers.get_register_u16(*register)
+                } else {
+                    self.registers.get_register_u8(*register) as u16
                 }
             }
-            Operation::ArithmaticImmediateWithAccumulator => {
+            Operand::EffectiveAddress(effective_address) => {
+                if wide {
+                    self.memory
+                        .get_address_u16(self.calculate_address(*effective_address))
+                } else {
+                    self.memory
+                        .get_address_u8(self.calculate_address(*effective_address))
+                        as u16
+                }
+            }
+            Operand::Address(address) => {
+                if wide {
+                    self.memory.get_address_u16(*address)
+                } else {
+                    self.memory.get_address_u8(*address) as u16
+                }
+            }
+            Operand::ImmediateWord(imm) => *imm,
+            Operand::ImmediateByte(imm) => *imm as u16,
+            _ => unreachable!(),
+        };
+
+        match &instruction.operands.left {
+            Operand::Register(register) => {
+                if wide {
+                    self.registers.set_register_u16(*register, source_value);
+                } else {
+                    self.registers
+                        .set_register_u8(*register, source_value as u8);
+                }
+            }
+            Operand::EffectiveAddress(effective_address) => {
+                if wide {
+                    self.memory
+                        .set_address_u16(self.calculate_address(*effective_address), source_value);
+                } else {
+                    self.memory.set_address_u8(
+                        self.calculate_address(*effective_address),
+                        source_value as u8,
+                    );
+                }
+            }
+            Operand::Address(address) => {
+                if wide {
+                    self.memory.set_address_u16(*address, source_value);
+                } else {
+                    self.memory.set_address_u8(*address, source_value as u8);
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    fn execute_arithmatic_instruction(
+        &mut self,
+        instruction: &Instruction,
+        arithmatic_type: ArithmaticType,
+        wide: bool,
+    ) {
+        let dest_value = match &instruction.operands.left {
+            Operand::Register(register) => {
+                if wide {
+                    self.registers.get_register_u16(*register)
+                } else {
+                    self.registers.get_register_u8(*register) as u16
+                }
+            }
+            Operand::Address(address) => {
+                if wide {
+                    self.memory.get_address_u16(*address)
+                } else {
+                    self.memory.get_address_u8(*address) as u16
+                }
+            }
+            Operand::EffectiveAddress(effective_address) => {
+                if wide {
+                    self.memory
+                        .get_address_u16(self.calculate_address(*effective_address))
+                } else {
+                    self.memory
+                        .get_address_u8(self.calculate_address(*effective_address))
+                        as u16
+                }
+            }
+            _ => unreachable!(),
+        };
+
+        let source_value = match &instruction.operands.right {
+            Operand::Register(register) => {
+                if wide {
+                    self.registers.get_register_u16(*register)
+                } else {
+                    self.registers.get_register_u8(*register) as u16
+                }
+            }
+            Operand::Address(address) => {
+                if wide {
+                    self.memory.get_address_u16(*address)
+                } else {
+                    self.memory.get_address_u8(*address) as u16
+                }
+            }
+            Operand::EffectiveAddress(effective_address) => {
+                if wide {
+                    self.memory
+                        .get_address_u16(self.calculate_address(*effective_address))
+                } else {
+                    self.memory
+                        .get_address_u8(self.calculate_address(*effective_address))
+                        as u16
+                }
+            }
+            Operand::ImmediateWord(imm) => *imm,
+            _ => unreachable!(),
+        };
+
+        let (result, update_dest) = match arithmatic_type {
+            ArithmaticType::Add => (dest_value.wrapping_add(source_value), true),
+            ArithmaticType::Adc => {
                 todo!()
             }
+            ArithmaticType::Or => (dest_value | source_value, true),
+            ArithmaticType::Sbb => {
+                todo!()
+            }
+            ArithmaticType::And => (dest_value & source_value, true),
+            ArithmaticType::Sub => (dest_value.wrapping_sub(source_value), true),
+            ArithmaticType::Xor => (dest_value ^ source_value, true),
+            ArithmaticType::Cmp => (dest_value.wrapping_sub(source_value), false),
+        };
+
+        if update_dest {
+            match &instruction.operands.left {
+                Operand::Register(register) => {
+                    if wide {
+                        self.registers.set_register_u16(*register, result);
+                    } else {
+                        self.registers.set_register_u8(*register, result as u8);
+                    }
+                }
+                Operand::Address(address) => {
+                    if wide {
+                        self.memory.set_address_u16(*address, result);
+                    } else {
+                        self.memory.set_address_u8(*address, result as u8);
+                    }
+                }
+                Operand::EffectiveAddress(effective_address) => {
+                    if wide {
+                        self.memory
+                            .set_address_u16(self.calculate_address(*effective_address), result);
+                    } else {
+                        self.memory.set_address_u8(
+                            self.calculate_address(*effective_address),
+                            result as u8,
+                        );
+                    }
+                }
+                _ => unreachable!(),
+            }
         }
-        print!("\t; ");
-        let post_op_registers = self.registers;
-        for register in Self::DEBUG_REGISTERS {
-            register_changed(register, pre_op_registers, post_op_registers);
+
+        match arithmatic_type {
+            ArithmaticType::Sub | ArithmaticType::Cmp | ArithmaticType::Add => {
+                self.registers.set_flag(Flag::Zf, result == 0);
+                // Set Flag::Pf if the result has even parity.
+                self.registers
+                    .set_flag(Flag::Pf, (result & 0x00FF).count_ones() % 2 == 0);
+
+                // Set Flag::Sf if the most significant bit is set in result
+                let significant_bit = if wide { 0x8000 } else { 0x80 };
+
+                self.registers
+                    .set_flag(Flag::Sf, result & significant_bit == significant_bit);
+
+                // Set Flag::Of if the most significant bit was turned on
+                self.registers.set_flag(
+                    Flag::Of,
+                    (dest_value & significant_bit == 0)
+                        && (result & significant_bit == significant_bit),
+                );
+
+                // Set Flag::Cf if the dest_value is less than source_value
+                self.registers.set_flag(Flag::Cf, dest_value < source_value);
+            }
+            _ => {}
         }
-        let pre_flags: String = Self::DEBUG_FLAGS
-            .iter()
-            .filter(|f| pre_op_registers.get_flag(**f))
-            .map(|f| format!("{}", f))
-            .collect();
-        let post_flags: String = Self::DEBUG_FLAGS
-            .iter()
-            .filter(|f| post_op_registers.get_flag(**f))
-            .map(|f| format!("{}", f))
-            .collect();
-        if pre_flags != post_flags {
-            print!(" flags:{}->{}", pre_flags, post_flags);
-        }
-        println!();
     }
 
     const DEBUG_FLAGS: [Flag; 9] = [
@@ -861,57 +764,41 @@ impl Cpu {
         Flag::Tf,
     ];
 
-    fn set_address(&mut self, address: Address, value: MemoryValue) {
-        match address {
-            Address::Register(register) => self.registers.set_register(register, value),
-            Address::MemoryAddress(_) => self.memory.set_address(address, value),
-            Address::EffectiveFormula(effective_formula) => self
-                .memory
-                .set_address(self.calculate_address(effective_formula), value),
-        }
-    }
-
-    fn get_address(&self, address: Address) -> MemoryValue {
-        match address {
-            Address::Register(register) => self.registers.get_register(register),
-            Address::MemoryAddress(address) => self.memory.get_address(address),
-            Address::EffectiveFormula(effective_formula) => {
-                self.get_address(self.calculate_address(effective_formula))
-            }
-        }
-    }
-
-    fn calculate_address(&self, effective_address_formula: EffectiveAddress) -> Address {
-        Address::MemoryAddress(match effective_address_formula {
-            EffectiveAddress::BxSi(displacement) => (self.registers.get_register(Register::Bx)
-                + self.registers.get_register(Register::Si)
-                + MemoryValue::Word(displacement))
+    fn calculate_address(&self, effective_address_formula: EffectiveAddress) -> usize {
+        match effective_address_formula {
+            EffectiveAddress::BxSi(displacement) => (self.registers.get_register_u16(Register::Bx)
+                + self.registers.get_register_u16(Register::Si)
+                + displacement)
+                .into(),
+            EffectiveAddress::BxDi(displacement) => (self
+                .registers
+                .get_register_u16(Register::Bx)
+                .wrapping_add(self.registers.get_register_u16(Register::Di))
+                .wrapping_add(displacement))
             .into(),
-            EffectiveAddress::BxDi(displacement) => (self.registers.get_register(Register::Bx)
-                + self.registers.get_register(Register::Di)
-                + MemoryValue::Word(displacement))
-            .into(),
-            EffectiveAddress::BpSi(displacement) => (self.registers.get_register(Register::Bp)
-                + self.registers.get_register(Register::Si)
-                + MemoryValue::Word(displacement))
-            .into(),
-            EffectiveAddress::BpDi(displacement) => (self.registers.get_register(Register::Bp)
-                + self.registers.get_register(Register::Di)
-                + MemoryValue::Word(displacement))
-            .into(),
+            EffectiveAddress::BpSi(displacement) => (self.registers.get_register_u16(Register::Bp)
+                + self.registers.get_register_u16(Register::Si)
+                + displacement)
+                .into(),
+            EffectiveAddress::BpDi(displacement) => (self.registers.get_register_u16(Register::Bp)
+                + self.registers.get_register_u16(Register::Di)
+                + displacement)
+                .into(),
             EffectiveAddress::Si(displacement) => {
-                (self.registers.get_register(Register::Si) + MemoryValue::Word(displacement)).into()
+                (self.registers.get_register_u16(Register::Si) + displacement).into()
             }
             EffectiveAddress::Di(displacement) => {
-                (self.registers.get_register(Register::Di) + MemoryValue::Word(displacement)).into()
+                (self.registers.get_register_u16(Register::Di) + displacement).into()
             }
             EffectiveAddress::Bp(displacement) => {
-                (self.registers.get_register(Register::Bp) + MemoryValue::Word(displacement)).into()
+                (self.registers.get_register_u16(Register::Bp) + displacement).into()
             }
-            EffectiveAddress::Bx(displacement) => {
-                (self.registers.get_register(Register::Bx) + MemoryValue::Word(displacement)).into()
-            }
-        })
+            EffectiveAddress::Bx(displacement) => (self
+                .registers
+                .get_register_u16(Register::Bx)
+                .wrapping_add(displacement))
+            .into(),
+        }
     }
 
     const DEBUG_REGISTERS: [Register; 13] = [
@@ -930,14 +817,14 @@ impl Cpu {
         Register::Ip,
     ];
 
-    fn print_registers(&self) {
+    fn print_registers(&self, registers: Registers) {
         for register in Self::DEBUG_REGISTERS {
-            let value = self.registers.get_register(register);
+            let value = registers.get_register_u16(register);
             println!("\t{register}: 0x{value:04x} ({value})",);
         }
         let flags: String = Self::DEBUG_FLAGS
             .iter()
-            .filter(|f| self.registers.get_flag(**f))
+            .filter(|f| registers.get_flag(**f))
             .map(|f| format!("{}", f))
             .collect();
         println!("\tflags: {flags}");
@@ -945,37 +832,37 @@ impl Cpu {
 }
 
 fn register_changed(register: Register, pre: Registers, post: Registers) {
-    let pre = pre.get_register(register);
-    let post = post.get_register(register);
+    let pre = pre.get_register_u16(register);
+    let post = post.get_register_u16(register);
     if pre != post {
-        print!("{}:0x{:04x}->0x{:04x}", register, pre, post);
+        print!("{}:0x{:04x}->0x{:04x} ", register, pre, post);
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Instruction {
     op: Operation,
     operands: Operands,
     str_rep: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 struct Operands {
     left: Operand,
     right: Operand,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 enum Operation {
-    MovImmediateToRegister,
-    MovRegisterMemoryToFromRegister,
+    MoveImmediateToRegister(bool),
+    MoveRegisterMemoryToFromRegister(bool),
     MoveImmediateToRegisterOrMemory(bool),
-    MoveMemoryToAccumulator,
-    MoveAccumulatorToMemory,
-    ArithmaticImmediateWithAccumulator,
+    MoveMemoryToAccumulator(bool),
+    MoveAccumulatorToMemory(bool),
     Loop(LoopType),
     Jump(JumpType),
-    ArithmaticRegisterOrMemoryAndRegisterToEither(ArithmaticType),
+    ArithmaticImmediateWithAccumulator(ArithmaticType, bool),
+    ArithmaticRegisterOrMemoryAndRegisterToEither(ArithmaticType, bool),
     ArithmaticImmediateToRegisterOrMemory(ArithmaticType, bool),
 }
 
@@ -1026,6 +913,29 @@ enum JumpType {
     Jns,
 }
 
+impl std::fmt::Display for JumpType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            JumpType::Je => write!(f, "je"),
+            JumpType::Jl => write!(f, "jl"),
+            JumpType::Jle => write!(f, "jle"),
+            JumpType::Jb => write!(f, "jb"),
+            JumpType::Jbe => write!(f, "jbe"),
+            JumpType::Jp => write!(f, "jp"),
+            JumpType::Jo => write!(f, "jo"),
+            JumpType::Js => write!(f, "js"),
+            JumpType::Jne => write!(f, "jne"),
+            JumpType::Jnl => write!(f, "jnl"),
+            JumpType::Jnle => write!(f, "jnle"),
+            JumpType::Jnb => write!(f, "jnb"),
+            JumpType::Jnbe => write!(f, "jnbe"),
+            JumpType::Jnp => write!(f, "jnp"),
+            JumpType::Jno => write!(f, "jno"),
+            JumpType::Jns => write!(f, "jns"),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum LoopType {
     Loop,
@@ -1034,14 +944,40 @@ enum LoopType {
     Jcxz,
 }
 
-#[derive(Debug)]
+impl std::fmt::Display for LoopType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            LoopType::Loop => write!(f, "loop"),
+            LoopType::Loopz => write!(f, "loopz"),
+            LoopType::Loopnz => write!(f, "loopnz"),
+            LoopType::Jcxz => write!(f, "jcxz"),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 enum Operand {
     Register(Register),
     ImmediateByte(u8),
     ImmediateWord(u16),
-    Address(Address),
+    Address(usize),
+    EffectiveAddress(EffectiveAddress),
     SignedInstructionPointerIncrement(i8),
     None,
+}
+
+impl std::fmt::Display for Operand {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Operand::Register(r) => write!(f, "{}", r),
+            Operand::ImmediateByte(b) => write!(f, "0x{:02x}", b),
+            Operand::ImmediateWord(w) => write!(f, "0x{:04x}", w),
+            Operand::Address(a) => write!(f, "0x{:04x}", a),
+            Operand::EffectiveAddress(ea) => write!(f, "{}", ea),
+            Operand::SignedInstructionPointerIncrement(i) => write!(f, "0x{:02x}", i),
+            Operand::None => write!(f, ""),
+        }
+    }
 }
 
 const OPCODES: [(u8, u8, &str); 14] = [
@@ -1075,6 +1011,7 @@ const OPCODES: [(u8, u8, &str); 14] = [
     ), // xor
     (0b0111_0000, 0b1111_0000, "jump"), // 16
     (0b1110_0000, 0b1111_1100, "loop"), // 4
+                                        //   (0b1111_1111, 0b1111_1111, "call-indirect"),
 ];
 
 fn get_instruction(byte: u8) -> Option<&'static str> {
@@ -1087,18 +1024,18 @@ fn get_instruction(byte: u8) -> Option<&'static str> {
     panic!("Couldn't find instruction for byte {byte:#b}");
 }
 
-const REGISTER_ENCODING: [(&str, &str); 8] = [
-    ("al", "ax"),
-    ("cl", "cx"),
-    ("dl", "dx"),
-    ("bl", "bx"),
-    ("ah", "sp"),
-    ("ch", "bp"),
-    ("dh", "si"),
-    ("bh", "di"),
+const REGISTER_ENCODING: [(Register, Register); 8] = [
+    (Register::Al, Register::Ax),
+    (Register::Cl, Register::Cx),
+    (Register::Dl, Register::Dx),
+    (Register::Bl, Register::Bx),
+    (Register::Ah, Register::Sp),
+    (Register::Ch, Register::Bp),
+    (Register::Dh, Register::Si),
+    (Register::Bh, Register::Di),
 ];
 
-fn get_register_encoding(reg: u8, word: bool) -> &'static str {
+fn get_register_encoding(reg: u8, word: bool) -> Register {
     let reg: usize = reg.try_into().unwrap();
     if word {
         REGISTER_ENCODING[reg].1
@@ -1114,29 +1051,29 @@ fn get_effective_address(rm: usize) -> &'static str {
 }
 
 const LOOP_OPS: [LoopType; 4] = [
-    LoopType::Loop,
-    LoopType::Loopz,
     LoopType::Loopnz,
+    LoopType::Loopz,
+    LoopType::Loop,
     LoopType::Jcxz,
 ];
 
 const JUMP_OPS: [JumpType; 16] = [
-    JumpType::Je,
-    JumpType::Jl,
-    JumpType::Jle,
-    JumpType::Jb,
-    JumpType::Jbe,
-    JumpType::Jp,
     JumpType::Jo,
-    JumpType::Js,
-    JumpType::Jne,
-    JumpType::Jnl,
-    JumpType::Jnle,
-    JumpType::Jnb,
-    JumpType::Jnbe,
-    JumpType::Jnp,
     JumpType::Jno,
+    JumpType::Jb,
+    JumpType::Jnb,
+    JumpType::Je,
+    JumpType::Jne,
+    JumpType::Jbe,
+    JumpType::Jnbe,
+    JumpType::Js,
     JumpType::Jns,
+    JumpType::Jp,
+    JumpType::Jnp,
+    JumpType::Jl,
+    JumpType::Jnl,
+    JumpType::Jle,
+    JumpType::Jnle,
 ];
 
 fn r#loop(byte: u8, cpu: &mut Cpu) -> Instruction {
@@ -1155,10 +1092,10 @@ fn r#loop(byte: u8, cpu: &mut Cpu) -> Instruction {
     Instruction {
         op: Operation::Loop(loop_op),
         operands: Operands {
-            left: Operand::SignedInstructionPointerIncrement(ip_inc8),
+            left: Operand::SignedInstructionPointerIncrement(ip_inc8 - 2),
             right: Operand::None,
         },
-        str_rep: format!("{loop_op:?} {inc_ip}"),
+        str_rep: format!("{loop_op} {inc_ip}"),
     }
 }
 
@@ -1178,10 +1115,10 @@ fn jump(byte: u8, cpu: &mut Cpu) -> Instruction {
     Instruction {
         op: Operation::Jump(jump_op),
         operands: Operands {
-            left: Operand::SignedInstructionPointerIncrement(ip_inc8),
+            left: Operand::SignedInstructionPointerIncrement(ip_inc8 - 2),
             right: Operand::None,
         },
-        str_rep: format!("{jump_op:?} {inc_ip}"),
+        str_rep: format!("{jump_op} {inc_ip}"),
     }
 }
 
@@ -1214,21 +1151,21 @@ fn arithmatic_reg_mem_and_reg_to_either(byte: u8, cpu: &mut Cpu) -> Instruction 
     let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
     if reg_is_destination {
         Instruction {
-            op: Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(op),
-            operands: Operands {
-                left: Operand::Register(Register::from_str(reg)),
-                right: Operand::Address(effective_address_formula),
-            },
             str_rep: format!("{op} {reg}, {effective_address_formula}"),
+            op: Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(op, wide),
+            operands: Operands {
+                left: Operand::Register(reg),
+                right: effective_address_formula,
+            },
         }
     } else {
         Instruction {
-            op: Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(op),
-            operands: Operands {
-                left: Operand::Address(effective_address_formula),
-                right: Operand::Register(Register::from_str(reg)),
-            },
             str_rep: format!("{op} {effective_address_formula}, {reg}"),
+            op: Operation::ArithmaticRegisterOrMemoryAndRegisterToEither(op, wide),
+            operands: Operands {
+                left: effective_address_formula,
+                right: Operand::Register(reg),
+            },
         }
     }
 }
@@ -1251,21 +1188,21 @@ fn mov_seg_reg_to_from_reg_mem(cpu: &mut Cpu, register_is_destination: bool) -> 
 
     if register_is_destination {
         Instruction {
-            op: Operation::MovRegisterMemoryToFromRegister,
+            str_rep: format!("mov {segment_register}, {effective_address_formula}"),
+            op: Operation::MoveRegisterMemoryToFromRegister(true),
             operands: Operands {
                 left: Operand::Register(segment_register),
-                right: Operand::Address(effective_address_formula),
+                right: effective_address_formula,
             },
-            str_rep: format!("mov {segment_register}, {effective_address_formula}"),
         }
     } else {
         Instruction {
-            op: Operation::MovRegisterMemoryToFromRegister,
+            str_rep: format!("mov {effective_address_formula}, {segment_register}"),
+            op: Operation::MoveRegisterMemoryToFromRegister(true),
             operands: Operands {
-                left: Operand::Address(effective_address_formula),
+                left: effective_address_formula,
                 right: Operand::Register(segment_register),
             },
-            str_rep: format!("mov {effective_address_formula}, {segment_register}"),
         }
     }
 }
@@ -1283,21 +1220,21 @@ fn mov_reg_mem_to_from_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
     let effective_address_formula = get_effective_address_formula(&mut data, wide, cpu);
     if reg_is_destination {
         Instruction {
-            op: Operation::MovRegisterMemoryToFromRegister,
-            operands: Operands {
-                left: Operand::Register(Register::from_str(reg)),
-                right: Operand::Address(effective_address_formula),
-            },
             str_rep: format!("mov {reg}, {effective_address_formula}"),
+            op: Operation::MoveRegisterMemoryToFromRegister(wide),
+            operands: Operands {
+                left: Operand::Register(reg),
+                right: effective_address_formula,
+            },
         }
     } else {
         Instruction {
-            op: Operation::MovRegisterMemoryToFromRegister,
-            operands: Operands {
-                left: Operand::Address(effective_address_formula),
-                right: Operand::Register(Register::from_str(reg)),
-            },
             str_rep: format!("mov {effective_address_formula}, {reg}"),
+            op: Operation::MoveRegisterMemoryToFromRegister(wide),
+            operands: Operands {
+                left: effective_address_formula,
+                right: Operand::Register(reg),
+            },
         }
     }
 }
@@ -1338,7 +1275,7 @@ fn arithmatic_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> Instruction {
         str_rep: format!("{op} {width_specifier}{effective_address_formula}, {immediate}"),
         op: Operation::ArithmaticImmediateToRegisterOrMemory(op, wide),
         operands: Operands {
-            left: Operand::Address(effective_address_formula),
+            left: effective_address_formula,
             right: Operand::ImmediateWord(immediate as u16),
         },
     }
@@ -1367,7 +1304,7 @@ fn mov_immediate_to_reg_mem(byte: u8, cpu: &mut Cpu) -> Instruction {
         str_rep: format!("mov {effective_address_formula}, {immediate}"),
         op: Operation::MoveImmediateToRegisterOrMemory(wide),
         operands: Operands {
-            left: Operand::Address(effective_address_formula),
+            left: effective_address_formula,
             right: Operand::ImmediateWord(immediate as u16),
         },
     }
@@ -1393,11 +1330,9 @@ fn mov_accumulator_to_memory(byte: u8, cpu: &mut Cpu) -> Instruction {
 
     Instruction {
         str_rep: format!("mov [{address}], ax"),
-        op: Operation::MoveAccumulatorToMemory,
+        op: Operation::MoveAccumulatorToMemory(wide),
         operands: Operands {
-            left: Operand::Address(Address::MemoryAddress(MemoryAddress {
-                address: address as usize,
-            })),
+            left: Operand::Address(address as usize),
             right: Operand::Register(Register::Ax),
         },
     }
@@ -1426,7 +1361,7 @@ fn arithmatic_immediate_with_accumulator(byte: u8, cpu: &mut Cpu) -> Instruction
     // format!("{op} {reg}, {immediate}");
     Instruction {
         str_rep: format!("{op} {reg}, {immediate}"),
-        op: Operation::ArithmaticImmediateWithAccumulator,
+        op: Operation::ArithmaticImmediateWithAccumulator(op, wide),
         operands: Operands {
             left: Operand::Register(if wide { Register::Ax } else { Register::Al }),
             right: Operand::ImmediateWord(immediate as u16),
@@ -1453,11 +1388,9 @@ fn mov_memory_to_accumulator(byte: u8, cpu: &mut Cpu) -> Instruction {
     //format!("mov ax, [{address}]")
     Instruction {
         str_rep: format!("mov ax, [{address}]"),
-        op: Operation::MoveMemoryToAccumulator,
+        op: Operation::MoveMemoryToAccumulator(wide),
         operands: Operands {
-            left: Operand::Address(Address::MemoryAddress(MemoryAddress {
-                address: address as usize,
-            })),
+            left: Operand::Address(address as usize),
             right: Operand::Register(Register::Ax),
         },
     }
@@ -1484,9 +1417,9 @@ fn mov_immediate_to_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
     };
 
     Instruction {
-        op: Operation::MovImmediateToRegister,
+        op: Operation::MoveImmediateToRegister(wide),
         operands: Operands {
-            left: Operand::Register(Register::from_str(reg)),
+            left: Operand::Register(reg),
             right: if wide {
                 Operand::ImmediateWord(immediate as u16)
             } else {
@@ -1497,15 +1430,13 @@ fn mov_immediate_to_reg(byte: u8, cpu: &mut Cpu) -> Instruction {
     }
 }
 
-fn get_effective_address_formula(data: &mut Vec<u8>, wide: bool, cpu: &mut Cpu) -> Address {
+fn get_effective_address_formula(data: &mut Vec<u8>, wide: bool, cpu: &mut Cpu) -> Operand {
     let mod_field = (data[0] & 0b1100_0000).rotate_left(2);
     let rm = data[0] & 0b0000_0111;
     match mod_field {
-        0b11 => Address::Register(Register::from_str(get_register_encoding(rm, wide))),
+        0b11 => Operand::Register(get_register_encoding(rm, wide)),
         _ => {
             let mut address: i16 = 0;
-            let effective_address_formula =
-                get_effective_address(rm.try_into().unwrap()).to_string();
             //println!("; effective_address_formula: {effective_address_formula}");
             if mod_field != 0 || rm == 6 {
                 data.push(cpu.next_instruction().unwrap());
@@ -1524,17 +1455,17 @@ fn get_effective_address_formula(data: &mut Vec<u8>, wide: bool, cpu: &mut Cpu) 
                         .unwrap();
                 }
             }
+            let effective_address_formula =
+                get_effective_address(rm.try_into().unwrap()).to_string();
             if mod_field == 0 && rm == 6 {
-                Address::MemoryAddress(MemoryAddress {
-                    address: address.try_into().unwrap(),
-                })
+                Operand::Address(address.try_into().unwrap())
             } else if address != 0 {
-                Address::EffectiveFormula(EffectiveAddress::from_str(
+                Operand::EffectiveAddress(EffectiveAddress::from_str(
                     effective_address_formula,
-                    address.try_into().unwrap(),
+                    address as u16,
                 ))
             } else {
-                Address::EffectiveFormula(EffectiveAddress::from_str(effective_address_formula, 0))
+                Operand::EffectiveAddress(EffectiveAddress::from_str(effective_address_formula, 0))
             }
         }
     }
