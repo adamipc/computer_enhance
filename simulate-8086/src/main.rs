@@ -8,7 +8,14 @@ fn main() -> std::io::Result<()> {
     let mut args = env::args();
     args.next();
 
-    let filename = args.next().unwrap();
+    let mut execute = false;
+    let mut filename = String::new();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-exec" => execute = true,
+            _ => filename = arg.to_string(),
+        }
+    }
     println!("; {filename}");
 
     let mut f = File::open(filename)?;
@@ -23,6 +30,6 @@ fn main() -> std::io::Result<()> {
     // so we can easily re-encode our decode to test.
     println!("\nbits 16\n");
 
-    cpu.run(false);
+    cpu.run(execute);
     Ok(())
 }
